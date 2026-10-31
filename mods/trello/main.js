@@ -90,13 +90,23 @@ export default class Trello extends View {
   // Everything derived from the boards, worked out once per change instead of on every render:
   // newest activity first, so a filtered list keeps that order without sorting again. Which lists
   // are current or done comes from the settings now, not from when the board was fetched.
+  // Kept light: Herdr cuts off a script that runs too long, and on a busy machine 1500 cards are a
+  // lot. Each list name is matched once (not once per card), everything is counted in one pass,
+  // and the results are put in place together at the end, so a cut-off never leaves half of them.
   rebuild() {
-    const { isCurrent, isDone } = this.config;
-    this.cards = Object.values(this.boards).flatMap((b) => b.cards).sort((a, b) => b.active - a.active);
-    for (const c of this.cards) { c.current = isCurrent(c.list); c.done = isDone(c.list); }
-    this.byLink = new Map(this.cards.map((c) => [shortLink(c.url), c]));
-    for (const v of Object.keys(VIEWS)) this.counts[v] = this.cards.filter(VIEWS[v].has).length;
-    this.memo = null;
+    const { isCurrent, isDone } = this.config, lists = new Map(), views = Object.entries(VIEWS);
+    const cards = [];
+    for (const b of Object.values(this.boards)) for (const c of b.cards) cards.push(c);
+    cards.sort((a, b) => b.active - a.active);
+    const counts = Object.fromEntries(views.map(([v]) => [v, 0])), byLink = new Map();
+    for (const c of cards) {
+      let kind = lists.get(c.list);
+      if (!kind) lists.set(c.list, (kind = { current: isCurrent(c.list), done: isDone(c.list) }));
+      c.current = kind.current; c.done = kind.done;
+      for (const [v, { has }] of views) if (has(c)) counts[v]++;
+      byLink.set(shortLink(c.url), c);
+    }
+    this.cards = cards; this.counts = counts; this.byLink = byLink; this.memo = null;
   }
 
   // One board's cards in the shape the panel draws.
@@ -123,8 +133,10 @@ export default class Trello extends View {
   // One board at a time, because Herdr cuts off a script that works too long in one go.
   // `stale`: a board the card dialog just changed, fetched whatever its activity says.
   refresh(cx, stale = null) {
-    if (this.syncing) { if (stale) this.stale = stale; return; }
-    this.syncing = true;
+    // `syncing` holds when the sync started. One that Herdr cut off never finishes; after two
+    // minutes it no longer blocks the next.
+    if (this.syncing && Date.now() - this.syncing < 120000) { if (stale) this.stale = stale; return; }
+    this.syncing = Date.now();
     const before = this.error;
     let changed = false;
     cx.spawn(async (cx) => {
@@ -212,8 +224,8 @@ export default class Trello extends View {
   // https://trello.com/c/…"): newest line first. A focused mod pane has no terminal: the last one stays.
   scan(cx) {
     const terminal = (this.terminal = focused()?.terminal ?? this.terminal);
-    if (this.scanning || !terminal || !this.byLink) return;
-    this.scanning = true;
+    if ((this.scanning && Date.now() - this.scanning < 30000) || !terminal || !this.byLink) return;
+    this.scanning = Date.now();
     cx.spawn(async (cx) => {
       try {
         const r = await hc(["read", terminal, "--lines", "300"]);
