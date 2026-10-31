@@ -1,13 +1,14 @@
+import * as fs from "fs/promises";
 import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
 import { exec, theme, closeOverlay, openOverlay } from "herdr";
-import { trello, short } from "./api.js";
+import { trello, short, data } from "./api.js";
 import { glyph, spinner } from "./icons.js";
 import { blocks, picture, failed, loadPicture } from "./pictures.js";
 import { start, tabOf, goTo, pickRepo, nudge } from "./start.js";
 
 const FIELDS = [
-  "fields=name,desc,due,dueComplete,labels,shortUrl,idShort,idList,idBoard",
+  "fields=name,desc,due,dueComplete,labels,shortUrl,idShort,idList,idBoard,dateLastActivity",
   "members=true&member_fields=fullName,username,initials,avatarUrl",
   "checklists=all&checklist_fields=name,pos&checkItems=all&checkItem_fields=name,state,pos",
   "attachments=true&attachment_fields=name,url,fileName,isUpload,bytes,mimeType",
@@ -19,6 +20,7 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 // Trello's label colors, the same in every theme so they read as Trello's.
 const LABELS = { green: "#4bce97", yellow: "#e2b203", orange: "#fea362", red: "#f87168", purple: "#9f8fef", blue: "#579dff", sky: "#6cc3e0", lime: "#94c748", pink: "#e774bb", black: "#8590a2" };
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp)$/i;
+const cardFile = (id) => `${data()}/cards/${id}.json`;
 
 // "3h ago" this month, "on Sep 21" before that.
 function ago(iso) {
@@ -76,13 +78,34 @@ export class Viewer {
     this.reply.on("change", (_e, cx) => { const has = Boolean(this.reply.value().trim()); if (has !== this.replying) { this.replying = has; cx.notify(); } });
     this.reply.on("submit", (e, cx) => { if (e.secondary) this.comment(cx); });
     this.parts = new Map();
-    this.load(cx);
+    this.open(cx);
+  }
+
+  // The card as it was the last time it was open, at once; from Trello only when it changed since
+  // (the panel's sync knows when each card last changed) or when nothing is saved yet. As Herdr
+  // Issues does it: what's cached shows, what's new loads behind it.
+  open(cx) {
+    this.loading = true;
+    cx.spawn(async (cx) => {
+      const saved = await fs.readFile(cardFile(this.card.id), "utf8").then(JSON.parse).catch(() => null);
+      if (saved?.full) this.show(saved.full);
+      if (saved?.full && saved.active && saved.active === this.card.active) { this.loading = false; cx.notify(); }
+      else { cx.notify(); this.load(cx); }
+    });
+  }
+
+  show(full) { this.full = full; this.items = timeline(full.actions ?? []); }
+
+  // Kept with when Trello last saw the card change; `active` null means "fetch again next time".
+  async save(active) {
+    await fs.mkdir(`${data()}/cards`, { recursive: true }).catch(() => null);
+    await fs.writeFile(cardFile(this.card.id), JSON.stringify({ active, full: this.full })).catch(() => null);
   }
 
   load(cx) {
     this.loading = true; this.error = null;
     cx.spawn(async (cx) => {
-      try { this.full = await trello(`cards/${this.card.id}?${FIELDS}`); this.items = timeline(this.full.actions ?? []); }
+      try { this.show(await trello(`cards/${this.card.id}?${FIELDS}`)); await this.save(Date.parse(this.full.dateLastActivity ?? "") || null); }
       catch (e) { this.error = String(e?.message ?? e); }
       finally { this.loading = false; cx.notify(); }
     });
@@ -99,6 +122,8 @@ export class Viewer {
       finally {
         this.busy = null;
         nudge(this.card.boardId);
+        // What's saved no longer matches Trello: the next open fetches the card again.
+        if (this.full) await this.save(null);
         if (reload || this.error) this.load(cx); else cx.notify();
       }
     });
