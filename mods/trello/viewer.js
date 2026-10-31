@@ -33,7 +33,13 @@ function ago(iso) {
 
 const day = (iso) => { const d = new Date(iso); return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`; };
 const size = (n) => n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : n > 1e3 ? `${Math.round(n / 1e3)} kB` : `${n} B`;
-export const openUrl = (url) => exec("open", [url]).catch(() => null);
+// Only web links go to macOS `open`. Card text is written by whoever uses the board, and `open`
+// also takes file://, smb:// and app URL schemes: one click on such a link could start a file
+// the card itself delivered (uploads land unquarantined). Herdr's own link filter does the same,
+// but only when a mod doesn't handle clicks itself.
+export const openUrl = (url) => /^https?:\/\/[^\s/]/i.test(url ?? "") ? exec("open", [url]).catch(() => null) : null;
+// A file this mod wrote itself (a downloaded picture).
+const openFile = (path) => exec("open", [path]).catch(() => null);
 
 // Copy link, reference or title: a popup of the panel's mod.
 export function copyMenu({ url, number, title }, at) {
@@ -109,6 +115,7 @@ export class Viewer {
 
   // Shown at once; the reload after Trello answers confirms it.
   tick(item, cx) {
+    if (this.busy) return;
     const state = item.state === "complete" ? "incomplete" : "complete";
     item.state = state;
     this.change("Saving", () => trello(`cards/${this.card.id}/checkItem/${item.id}`, { method: "PUT", params: { state } }), cx);
@@ -145,7 +152,7 @@ export class Viewer {
   folder(cx) {
     cx.spawn(async (cx) => {
       const picked = await pickRepo(this.card.board);
-      if (picked) { this.repo = picked; setShared("trello.changed", { board: this.card.boardId, repos: true, at: Date.now() }); cx.notify(); }
+      if (picked) { this.repo = picked; cx.notify(); }
     });
   }
 
@@ -192,7 +199,7 @@ export class Viewer {
       .flex().items_center().justify_center().px(12).text_size(12).text_color(t.muted).truncate()
       .child(failed(url) ? `Image could not be loaded${alt ? `: ${alt}` : ""}` : "Loading image…");
     const room = max ?? Math.max(240, (this.width ?? 1100) - 380), w = Math.min(p.width, room), h = Math.round(p.height * w / p.width);
-    return div().id(key).flex_none().cursor_pointer().on_click(() => openUrl(p.file)).child(image(p.path).w(w).h(h).rounded(8));
+    return div().id(key).flex_none().cursor_pointer().on_click(() => openFile(p.file)).child(image(p.path).w(w).h(h).rounded(8));
   }
 
   section(title, glyph, t, body, extra = null) {

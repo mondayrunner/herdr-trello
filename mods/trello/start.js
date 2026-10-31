@@ -37,7 +37,7 @@ export function goTo(open) {
 // The system folder picker for a board; the choice is saved in settings.json.
 export async function pickRepo(board) {
   const folder = await pickFolder({ prompt: `Use for ${board}` });
-  if (folder) await saveRepo(board, folder);
+  if (folder) { await saveRepo(board, folder); setShared("trello.changed", { repos: true, at: Date.now() }); }
   return folder;
 }
 

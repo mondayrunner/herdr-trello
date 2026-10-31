@@ -16,6 +16,15 @@ export const expand = (p) => p.replace(/^~(?=\/|$)/, home());
 export const short = (path) => path.split("/").slice(-2).join("/");
 const settingsFile = () => `${data()}/settings.json`;
 const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// A list's name without the emoji or marks in front ("⚡️ Doing" is "Doing"), matched as a whole name,
+// or followed by a note after a bracket or dash ("Doing (Tim)", "Done – week 3"), not by more words
+// ("Doing later" and "Undone" are other lists).
+const bare = (name) => name.replace(/^[^\p{L}\p{N}]+/u, "").trim();
+const anyOf = (names) => names.length ? new RegExp(`^(?:${names.map((n) => escape(n).replace(/\s+/g, "\\s*")).join("|")})(?:\\s*[(\\[:–—-].*)?$`, "i") : null;
+// The local date of a Trello timestamp (Trello stores UTC), as YYYY-MM-DD.
+export const localDay = (iso) => { const d = new Date(iso), p = (n) => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; };
+// Back to ~ only when the path is inside the home folder itself, not one that starts with the same letters.
+const tilde = (path) => path === home() || path.startsWith(`${home()}/`) ? `~${path.slice(home().length)}` : path;
 
 let config = null, auth = null;
 
@@ -27,21 +36,22 @@ async function saved() {
 export async function settings() {
   if (!config) {
     config = { ...DEFAULTS, ...await saved() };
-    config.currentList = new RegExp(escape(config.current).replace(/\s+/g, "\\s*"), "i");
-    config.doneList = new RegExp(config.done.map(escape).join("|"), "i");
+    const current = anyOf([config.current]), done = anyOf(config.done);
+    config.isCurrent = (list) => current.test(bare(list));
+    config.isDone = (list) => Boolean(done?.test(bare(list)));
   }
   return config;
 }
 
-// Read settings.json again on next use (another copy of the mod wrote to it).
-export function reload() { config = null; }
+// Read settings.json and the env file again on next use (edited, or another copy of the mod wrote to it).
+export function reload() { config = null; auth = null; }
 
-// One board's folder, kept in settings.json.
+// One board's folder, added to what's in settings.json now (another copy may have saved one meanwhile).
 export async function saveRepo(board, folder) {
-  const s = await settings(), file = await saved();
-  s.repos = { ...s.repos, [board]: folder.replace(home(), "~") };
+  const file = await saved(), repos = { ...file.repos, [board]: tilde(folder) };
   await fs.mkdir(data(), { recursive: true });
-  await fs.writeFile(settingsFile(), JSON.stringify({ ...file, repos: s.repos }, null, 2) + "\n");
+  await fs.writeFile(settingsFile(), JSON.stringify({ ...file, repos }, null, 2) + "\n");
+  if (config) config.repos = repos;
 }
 
 function parseEnv(text) {

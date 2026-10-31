@@ -3,7 +3,7 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
 import { icons, icon } from "./icons.js";
-import { DEFAULTS, settings, reload, trello, data, expand, short } from "./api.js";
+import { DEFAULTS, settings, reload, trello, data, expand, short, localDay } from "./api.js";
 import { tabIndex, links, pickRepo } from "./start.js";
 import { Viewer, copyMenu, openUrl } from "./viewer.js";
 
@@ -11,7 +11,7 @@ const SHOWN = 100;                    // rows drawn at most; the filter narrows 
 const SYNC = 60000;                   // how often the boards are checked while the panel shows
 const SCAN = 3000;                    // how often the focused terminal is read for card links
 const RESYNC = 6 * 3600 * 1000;       // a full fetch now and then catches what board activity misses
-const CACHE = 3;                      // a board file of another version is fetched again
+const CACHE = 4;                      // a board file of another version is fetched again
 const MENTIONS = 6;
 
 const boardsDir = () => `${data()}/boards`;
@@ -82,32 +82,36 @@ export default class Trello extends View {
     for (const f of (await fs.readdir(boardsDir())).filter((f) => f.endsWith(".json"))) {
       const board = await fs.readFile(`${boardsDir()}/${f}`, "utf8").then(JSON.parse).catch(() => null);
       if (board?.version === CACHE) this.boards[board.id] = board;
+      else await fs.unlink(`${boardsDir()}/${f}`).catch(() => null);  // another version's cache: fetched again
     }
     this.rebuild();
   }
 
   // Everything derived from the boards, worked out once per change instead of on every render:
-  // newest activity first, so a filtered list keeps that order without sorting again.
+  // newest activity first, so a filtered list keeps that order without sorting again. Which lists
+  // are current or done comes from the settings now, not from when the board was fetched.
   rebuild() {
+    const { isCurrent, isDone } = this.config;
     this.cards = Object.values(this.boards).flatMap((b) => b.cards).sort((a, b) => b.active - a.active);
+    for (const c of this.cards) { c.current = isCurrent(c.list); c.done = isDone(c.list); }
     this.byLink = new Map(this.cards.map((c) => [shortLink(c.url), c]));
     for (const v of Object.keys(VIEWS)) this.counts[v] = this.cards.filter(VIEWS[v].has).length;
     this.memo = null;
   }
 
   // One board's cards in the shape the panel draws.
-  normalize(board, raw, now) {
-    const me = this.meta.me.id, { currentList, doneList } = this.config;
+  normalize(board, raw) {
+    const me = this.meta.me.id;
     return raw.flatMap((c) => {
       const at = board.lists.findIndex((l) => l.id === c.idList);
       if (at < 0) return [];
       const list = board.lists[at].name, labels = (c.labels ?? []).map((l) => l.name).filter(Boolean);
-      const due = c.due ? c.due.slice(0, 10) : null;
+      const due = c.due ? localDay(c.due) : null;
       return [{
         id: c.id, number: c.idShort, title: c.name, url: c.shortUrl, board: board.name, boardId: board.id, boardUrl: board.shortUrl,
-        list, order: at * 1e9 + (c.pos ?? 0), current: currentList.test(list), done: doneList.test(list),
+        list, order: at * 1e9 + (c.pos ?? 0),
         mine: (c.idMembers ?? []).includes(me), nobody: !(c.idMembers ?? []).length,
-        overdue: !!c.due && !c.dueComplete && Date.parse(c.due) < now, active: Date.parse(c.dateLastActivity ?? 0) || 0,
+        due: c.due && !c.dueComplete ? c.due : null, active: Date.parse(c.dateLastActivity ?? 0) || 0,
         meta: [list, due && `due ${due}`, ...labels].filter(Boolean).join(" · "),
         hay: `#${c.idShort} ${c.name} ${board.name} ${list} ${labels.join(" ")}`.toLowerCase(),
       }];
@@ -126,9 +130,10 @@ export default class Trello extends View {
     cx.spawn(async (cx) => {
       try {
         if (!this.meta) { await this.load(); this.resolve(cx); cx.notify(); }
+        this.config = await settings();
         if (!this.meta.me) { const m = await trello("members/me", { params: { fields: "username" } }); this.meta.me = { id: m.id, username: m.username }; }
         const boards = await trello("members/me/boards", { params: { filter: "open", fields: "name,shortUrl,dateLastActivity", lists: "open" } });
-        const client = boards.filter((b) => (b.lists ?? []).some((l) => this.config.currentList.test(l.name)));
+        const client = boards.filter((b) => (b.lists ?? []).some((l) => this.config.isCurrent(l.name)));
         const started = Date.now(), full = started - this.meta.full > RESYNC;
         // Boards that closed or lost their current list go.
         const keep = new Set(client.map((b) => b.id));
@@ -140,24 +145,32 @@ export default class Trello extends View {
           const lists = b.lists.map((l) => l.name).join("\n"), have = this.boards[b.id];
           if (!full && b.id !== stale && have && have.activity === b.dateLastActivity && have.lists === lists) continue;
           const raw = await trello(`boards/${b.id}/cards`, { params: { filter: "open", fields: "name,idShort,idList,idMembers,due,dueComplete,shortUrl,dateLastActivity,pos,labels" } });
-          const board = { version: CACHE, id: b.id, name: b.name, activity: b.dateLastActivity, lists, cards: this.normalize(b, raw, started) };
+          const board = { version: CACHE, id: b.id, name: b.name, activity: b.dateLastActivity, lists, cards: this.normalize(b, raw) };
           this.boards[b.id] = board; changed = true;
           await fs.writeFile(boardFile(b.id), JSON.stringify(board));
         }
         if (full) this.meta.full = started;
         if (full || changed) await fs.writeFile(metaFile(), JSON.stringify(this.meta));
-        if (changed) this.rebuild();
         this.error = null;
       } catch (e) { this.error = String(e?.message ?? e); }
       finally {
         // Every redraw of a mod redraws the whole window: only when there's something new to show,
         // or when Refresh showed its spinner.
+        // Also after a failed sync: what did change (a board gone, one fetched) shows.
+        if (changed) this.rebuild();
         this.syncing = false; this.resolve(cx);
         if (changed || this.error !== before || this.spinning) { this.spinning = false; cx.notify(); }
         // A change that came in during this sync gets one of its own.
         if (this.stale) { const s = this.stale; this.stale = null; this.refresh(cx, s); }
       }
     });
+  }
+
+  // Refresh: settings, token and folders read again, and every board fetched again.
+  refreshAll(cx) {
+    reload(); this.repos = {}; this.folders = null; this.spinning = true;
+    if (this.meta) { this.meta.full = 0; this.meta.me = null; }
+    this.refresh(cx); cx.notify();
   }
 
   // Which folder each board's cards are worked on in, shown on its header so a wrong guess shows before a click.
@@ -276,7 +289,7 @@ export default class Trello extends View {
       .child(div().flex_none().w(34).text_color(t.dim).child(`#${c.number}`))
       .child(v_flex().flex_1().min_w(0).gap(2)
         .child(div().text_color(c.done ? t.muted : t.foreground).child(c.title))
-        .child(div().text_size(11).text_color(c.overdue ? t.ansi1 : t.dim).truncate().child(where === "card" ? c.meta : `${c.board} · ${c.meta}`)))
+        .child(div().text_size(11).text_color(c.due && Date.parse(c.due) < Date.now() ? t.ansi1 : t.dim).truncate().child(where === "card" ? c.meta : `${c.board} · ${c.meta}`)))
       .child(h_flex().flex_none().h(18).gap(6).items_center()
         .when(Boolean(mark), (e) => e.child(mark))
         .child(div().id(`${where}-browse-${c.id}`).size(16).flex().items_center().justify_center().rounded(4).text_color(t.dim)
@@ -323,7 +336,7 @@ export default class Trello extends View {
     const changed = shared("trello.changed");
     if (changed?.at && changed.at !== this.changedAt) {
       this.changedAt = changed.at;
-      if (changed.repos) { reload(); this.repos = {}; }
+      if (changed.repos) { reload(); this.repos = {}; this.folders = null; }
       this.refresh(cx, changed.board);
     }
 
@@ -340,7 +353,7 @@ export default class Trello extends View {
         .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).text_right().truncate().child(this.meta?.me ? `@${this.meta.me.username} · client boards` : ""))
         .child(h_flex().id("trello-refresh").h(26).px(8).gap(5).flex_none().items_center().rounded(7).border_1().border_color(t.border).text_size(12).text_color(t.muted)
           .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
-          .on_click((_e, cx) => { reload(); this.repos = {}; this.folders = null; this.spinning = true; this.refresh(cx); cx.notify(); })
+          .on_click((_e, cx) => this.refreshAll(cx))
           .child(this.syncing ? spinner(t) : div().size(12).when(this.icons, (e) => e.child(svg(icon("refresh")).size(12))))
           .child(this.syncing ? "Syncing" : "Refresh")))
       .child(v_flex().flex_none().p(8).gap(6).border_b(1).border_color(t.border)

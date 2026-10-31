@@ -39,6 +39,9 @@ A side panel beside Files and Changes that lists the Trello cards on your client
 - A copy hidden behind Files or Changes still renders: draw an empty `div()` then.
 - Herdr cuts off a render after 50 ms of script and async work after its own budget ("This view could not be re-rendered … interrupted"). Processing 1500 cards and writing one big cache file in one go hit it: work one board at a time, derive counts once per change, memoize the filtered list, and look up spaces once per folder per render.
 - Herdr watches its home without following symlinks, so edits in the linked checkout don't reload the mod, and switching layouts doesn't reliably either: `touch -h ~/.config/herdr-app/mods/trello` does (the link's own change is inside the watched tree). It writes `gpui-kit.d.ts` and `jsconfig.json` into the mod folder (ignored in git).
+- Links in card text go to macOS `open` only when they're `http(s)://`. Herdr's own markdown link filter (http/https only) is off as soon as a mod handles `on_link_click` itself, and `open` also takes `file://`, `smb://` and app URL schemes; uploads land without the quarantine flag, so a `file://` link to one could start it.
+- The markers around the card text in the brief carry a random tag (`----- CARD X7K2P9QA -----`), so card text that writes its own end marker can't close the data block and add rules.
+- List names match as a whole after any emoji in front, or with a note after a bracket or dash ("⚡️ Huidig verzoek (bij Tim)"), never as a substring ("Undone" is not "Done").
 - `task` is appended to `argv` as one argument (`claude "<brief>"`), so a multi-KB brief needs no quoting.
 
 ## Done when
