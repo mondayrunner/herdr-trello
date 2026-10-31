@@ -40,7 +40,7 @@ const full = {
   checklists: [{ id: "cl1", name: "Todo", pos: 1, checkItems: Array.from({ length: 6 }, (_, i) => ({ id: `ci${i}`, name: `Step ${i + 1}`, state: i < 2 ? "complete" : "incomplete", pos: i })) }],
   attachments: [{ id: "a1", name: "notes.docx", url: "https://trello.com/1/cards/c0x1/attachments/a1/download/notes.docx", fileName: "notes.docx", isUpload: true, bytes: 75000, mimeType: "application/msword" }],
   actions: Array.from({ length: 20 }, (_, i) => i % 4 === 3
-    ? { type: "updateCard", date: new Date(2026, 9, 1 + i).toISOString(), memberCreator: { fullName: "Rutger", initials: "R" }, data: { listBefore: { name: "Backlog" }, listAfter: { name: "⚡️ Doing" } } }
+    ? { type: "updateCard", date: new Date(2026, 9, 1 + i).toISOString(), memberCreator: { fullName: "Sam", initials: "S" }, data: { listBefore: { name: "Backlog" }, listAfter: { name: "⚡️ Doing" } } }
     : { type: "commentCard", date: new Date(2026, 9, 1 + i).toISOString(), memberCreator: { fullName: i % 2 ? "Tim" : "Client", initials: "T" }, data: { text: `Comment ${i + 1}: please also check the **header** on tablets.` } }).reverse(),
   list: { name: "⚡️ Doing" }, board: { name: "Acme Studio", shortUrl: "https://trello.com/b/B0" },
 };
