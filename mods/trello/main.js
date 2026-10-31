@@ -1,9 +1,9 @@
-import { View, div, svg } from "gpui-kit";
+import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
-import { icons, icon } from "./icons.js";
-import { DEFAULTS, settings, reload, trello, data, expand, short, localDay } from "./api.js";
+import { icons, glyph, spinner } from "./icons.js";
+import { DEFAULTS, CHANGED, settings, reload, trello, data, expand, short, localDay, inside, picked } from "./api.js";
 import { tabIndex, links, pickRepo } from "./start.js";
 import { Viewer, copyMenu, openUrl } from "./viewer.js";
 
@@ -40,20 +40,19 @@ function find(node, id) {
 }
 
 // Whether the Trello panel is the side panel showing. A copy outside the side panel (a pane) always counts.
-function panelShown() {
-  const root = layout(), body = find(root, "panel-body");
+function panelShown(root = layout()) {
+  const body = find(root, "panel-body");
   if (!body?.children?.some((c) => c.content?.mod === "trello")) return true;
   return !find(root, "panel")?.hidden && find(body, body.active)?.content?.mod === "trello";
 }
 
-const spinner = (t, size = 12) => svg("mods/workspace-chrome/spinner.svg").size(size).flex_none().text_color(t.working).spin(900);
 
 // The panel; its Trello button beside the tab bar (props { button: true }); or, as overlays of
 // this mod, one card (props { card, repo }) and the copy menu (props { copyMenu }).
 export default class Trello extends View {
   init(_props, cx) {
     const p = props() ?? {};
-    cx.spawn(async (cx) => { await icons(); this.icons = true; cx.notify(); });
+    cx.spawn(async (cx) => { await icons(); cx.notify(); });
     if (p.card) { this.viewer = new Viewer(p, p.overlay, cx); return; }
     if (p.copyMenu) { this.copying = { ...p.copyMenu, overlay: p.overlay }; return; }
     if (p.button) {
@@ -64,7 +63,7 @@ export default class Trello extends View {
       return;
     }
     this.boards = {}; this.cards = []; this.counts = {}; this.repos = {}; this.mentioned = [];
-    this.view = "current"; this.query = ""; this.changedAt = shared("trello.changed")?.at;
+    this.view = "current"; this.query = ""; this.changedAt = shared(CHANGED)?.at;
     this.input = InputState.new({ placeholder: "Filter cards" });
     this.input.on("change", (_e, cx) => { this.query = this.input.value(); cx.notify(); });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
@@ -134,7 +133,7 @@ export default class Trello extends View {
         if (!this.meta.me) { const m = await trello("members/me", { params: { fields: "username" } }); this.meta.me = { id: m.id, username: m.username }; }
         const boards = await trello("members/me/boards", { params: { filter: "open", fields: "name,shortUrl,dateLastActivity", lists: "open" } });
         const client = boards.filter((b) => (b.lists ?? []).some((l) => this.config.isCurrent(l.name)));
-        const started = Date.now(), full = started - this.meta.full > RESYNC;
+        const full = Date.now() - this.meta.full > RESYNC;
         // Boards that closed or lost their current list go.
         const keep = new Set(client.map((b) => b.id));
         for (const id of Object.keys(this.boards).filter((id) => !keep.has(id))) {
@@ -149,17 +148,17 @@ export default class Trello extends View {
           this.boards[b.id] = board; changed = true;
           await fs.writeFile(boardFile(b.id), JSON.stringify(board));
         }
-        if (full) this.meta.full = started;
+        if (full) this.meta.full = Date.now();
         if (full || changed) await fs.writeFile(metaFile(), JSON.stringify(this.meta));
         this.error = null;
       } catch (e) { this.error = String(e?.message ?? e); }
       finally {
-        // Every redraw of a mod redraws the whole window: only when there's something new to show,
-        // or when Refresh showed its spinner.
-        // Also after a failed sync: what did change (a board gone, one fetched) shows.
+        // Also after a failed sync: what did change (a board gone, one fetched) shows. Every redraw of
+        // a mod redraws the whole window, so only when there's something new to show, or when the
+        // last drawing showed "Syncing".
         if (changed) this.rebuild();
         this.syncing = false; this.resolve(cx);
-        if (changed || this.error !== before || this.spinning) { this.spinning = false; cx.notify(); }
+        if (changed || this.error !== before || this.drewSyncing) cx.notify();
         // A change that came in during this sync gets one of its own.
         if (this.stale) { const s = this.stale; this.stale = null; this.refresh(cx, s); }
       }
@@ -168,7 +167,7 @@ export default class Trello extends View {
 
   // Refresh: settings, token and folders read again, and every board fetched again.
   refreshAll(cx) {
-    reload(); this.repos = {}; this.folders = null; this.spinning = true;
+    reload(); this.repos = {}; this.folders = null;
     if (this.meta) { this.meta.full = 0; this.meta.me = null; }
     this.refresh(cx); cx.notify();
   }
@@ -179,6 +178,7 @@ export default class Trello extends View {
       this.config = await settings();
       const boards = [...new Set(this.cards.map((c) => c.board))].filter((b) => !(b in this.repos));
       if (!boards.length) return;
+      for (const b of boards) this.repos[b] = undefined;  // claimed, so a second resolve() skips them
       for (const b of boards) this.repos[b] = await this.repoFor(b).catch(() => null);
       cx.notify();
     });
@@ -229,11 +229,16 @@ export default class Trello extends View {
 
   // A card in the large view: a dialog of this mod, so it draws and writes on its own.
   open(card) {
-    openOverlay({ mod: "trello", kind: "dialog", width: 0.86, height: 0.9, props: { card, repo: this.repos[card.board] ?? null } });
+    openOverlay({ mod: "trello", kind: "dialog", width: 0.86, height: 0.9, props: { card, repo: this.repoOf(card.board) ?? null } });
+  }
+
+  // A folder picked in the panel or dialog, else the one from the settings or the guess.
+  repoOf(board, chosen = picked()) {
+    return chosen[board] ?? this.repos[board];
   }
 
   toolbar(t) {
-    const on = panelShown() && !find(layout(), "panel")?.hidden;
+    const root = layout(), on = panelShown(root) && !find(root, "panel")?.hidden;
     return h_flex().size_full().pr(10).items_center().justify_end().bg(t.chrome).border_b(1).border_color(t.border)
       .child(h_flex().id("panel-trello").h(26).px(8).gap(5).flex_none().items_center().rounded(6)
         .text_size(12).bg(on ? t.selected : t.chrome).text_color(on ? t.foreground : t.muted)
@@ -242,7 +247,7 @@ export default class Trello extends View {
           if (on) run("layout.hide", { id: "panel" });
           else { run("layout.select", { stack: "panel-body", child: "trello" }); run("layout.show", { id: "panel" }); }
         })
-        .child(div().size(14).when(this.icons, (e) => e.child(svg(icon("trello")).size(14)))).child("Trello"));
+        .child(glyph("trello", 14)).child("Trello"));
   }
 
   copyMenu(t) {
@@ -273,16 +278,16 @@ export default class Trello extends View {
   }
 
   // The board whose folder holds the focused terminal: its group comes first. A focused mod pane keeps the last one.
-  here() {
+  here(chosen) {
     const cwd = focused()?.cwd;
     if (!cwd) return this.hereBoard ?? null;
-    const match = Object.entries(this.repos).find(([, repo]) => repo && (cwd === repo || cwd.startsWith(`${repo}/`)));
-    return (this.hereBoard = match?.[0] ?? null);
+    const match = Object.keys({ ...this.repos, ...chosen }).find((b) => { const repo = this.repoOf(b, chosen); return repo && inside(cwd, repo); });
+    return (this.hereBoard = match ?? null);
   }
 
   row(c, t, tabs, linked, where = "card") {
-    const open = tabs.get(linked[c.id]), status = open?.tab.status;
-    const mark = status === "working" ? spinner(t) : open ? div().size(7).flex_none().rounded(4).bg(t[status] ?? t.idle) : null;
+    const open = linked[c.id] ? tabs().get(linked[c.id]) : null, status = open?.tab.status;
+    const mark = status === "working" ? spinner(t.working) : open ? div().size(7).flex_none().rounded(4).bg(t[status] ?? t.idle) : null;
     return h_flex().id(`${where}-${c.id}`).flex_none().px(10).py(6).gap(8).items_start().rounded(7).cursor_pointer()
       .hover((s) => s.bg(t.hover)).on_click(() => this.open(c))
       .on_mouse_down("right", () => copyMenu({ url: c.url, number: c.number, title: c.title }, "pointer"))
@@ -295,7 +300,7 @@ export default class Trello extends View {
         .child(div().id(`${where}-browse-${c.id}`).size(16).flex().items_center().justify_center().rounded(4).text_color(t.dim)
           .hover((s) => s.text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
           .on_click((_e, cx) => { cx.stop_propagation(); openUrl(c.url); })
-          .when(this.icons, (e) => e.child(svg(icon("external")).size(12)))));
+          .child(glyph("external", 12))));
   }
 
   heading(label, t) {
@@ -303,15 +308,15 @@ export default class Trello extends View {
   }
 
   // The board name opens the board; the folder (or "no folder") picks another folder for it.
-  board(g, t, here) {
-    const repo = this.repos[g.board];
+  board(g, t, here, chosen) {
+    const repo = this.repoOf(g.board, chosen);
     return h_flex().flex_none().px(10).pt(10).pb(4).gap(8).items_center()
       .when(here, (e) => e.child(div().size(6).flex_none().rounded(3).bg(t.accent)))
       .child(div().id(`board-${g.board}`).flex_none().cursor_pointer().text_size(11).font_semibold().text_color(here ? t.foreground : t.muted)
         .hover((s) => s.text_color(t.foreground)).on_click(() => openUrl(g.url)).child(g.board))
       .child(div().id(`folder-${g.board}`).flex_1().min_w(0).cursor_pointer().text_size(11).text_right().truncate()
         .text_color(repo === null ? t.ansi3 : t.dim).hover((s) => s.text_color(t.foreground))
-        .on_click((_e, cx) => cx.spawn(async (cx) => { const f = await pickRepo(g.board); if (f) { this.repos[g.board] = f; cx.notify(); } }))
+        .on_click((_e, cx) => cx.spawn(async () => { await pickRepo(g.board); }))
         .child(repo === undefined ? "" : repo === null ? "no folder" : short(repo)));
   }
 
@@ -324,37 +329,40 @@ export default class Trello extends View {
 
   render(cx) {
     if (this.viewer) return this.viewer.render(cx);
-    const t = theme();
-    if (this.copying) return this.copyMenu(t);
-    if (this.button) return this.toolbar(t);
-    // Hidden behind Files or Changes: draw nothing, and sync the moment it shows again.
+    if (this.copying) return this.copyMenu(theme());
+    if (this.button) return this.toolbar(theme());
+    // Hidden behind Files or Changes: draw nothing (and ask Herdr nothing more), and sync the moment it shows again.
     const shownNow = panelShown();
     if (!this.wasShown && shownNow) { this.refresh(cx); this.scan(cx); }
     this.wasShown = shownNow;
     if (!shownNow) return div();
-    // The card dialog changed a card or picked a folder: fetch that board again.
-    const changed = shared("trello.changed");
+    const t = theme();
+    // The card dialog wrote to a card: fetch that board again.
+    const changed = shared(CHANGED);
     if (changed?.at && changed.at !== this.changedAt) {
       this.changedAt = changed.at;
-      if (changed.repos) { reload(); this.repos = {}; this.folders = null; }
       this.refresh(cx, changed.board);
     }
+    this.drewSyncing = this.syncing;
 
     const { found, groups } = this.shown(), drawn = groups.reduce((n, g) => n + g.cards.length, 0);
-    const tabs = tabIndex(), linked = links(), here = this.here();
+    // The spaces are asked for only when a drawn card has a tab.
+    const linked = links(), chosen = picked(), here = this.here(chosen);
+    let index = null;
+    const tabs = () => (index ??= tabIndex());
     const ordered = here ? [...groups.filter((g) => g.board === here), ...groups.filter((g) => g.board !== here)] : groups;
     const loading = this.syncing && !this.cards.length;
     const empty = this.error || (loading ? "Loading cards…" : this.query.trim() ? "No cards match" : VIEWS[this.view].empty);
-    const label = (v) => VIEWS[v].label ?? this.config?.current ?? DEFAULTS.current;
+    const label = (v) => VIEWS[v].label ?? this.config?.currentName ?? DEFAULTS.current[0];
     return v_flex().id("trello").size_full().min_h(0).rounded(10).overflow_hidden().bg(t.background).border_1().border_color(t.border).text_color(t.foreground).text_size(13)
       .child(h_flex().h(42).flex_none().px(14).gap(8).items_center().border_b(1).border_color(t.border)
-        .child(div().size(14).flex_none().when(this.icons, (e) => e.child(svg(icon("trello")).size(14).text_color(t.ansi4))))
+        .child(glyph("trello", 14, t.ansi4))
         .child(div().font_semibold().child("Trello"))
         .child(div().flex_1().min_w(0).text_size(11).text_color(t.dim).text_right().truncate().child(this.meta?.me ? `@${this.meta.me.username} · client boards` : ""))
         .child(h_flex().id("trello-refresh").h(26).px(8).gap(5).flex_none().items_center().rounded(7).border_1().border_color(t.border).text_size(12).text_color(t.muted)
           .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground))
           .on_click((_e, cx) => this.refreshAll(cx))
-          .child(this.syncing ? spinner(t) : div().size(12).when(this.icons, (e) => e.child(svg(icon("refresh")).size(12))))
+          .child(this.syncing ? spinner(t.working) : glyph("refresh", 12))
           .child(this.syncing ? "Syncing" : "Refresh")))
       .child(v_flex().flex_none().p(8).gap(6).border_b(1).border_color(t.border)
         .child(div().id("trello-filter").h(28).px(9).flex().items_center().rounded(7).border_1().border_color(this.typing ? t.accent : t.border).cursor_text()
@@ -366,7 +374,7 @@ export default class Trello extends View {
         .when(Boolean(this.error) && drawn > 0, (e) => e.child(div().px(10).py(4).text_size(11).text_color(t.ansi1).child(this.error)))
         .when(this.mentioned.length > 0, (e) => e.child(this.heading("In this terminal", t))
           .children(this.mentioned.map((c) => this.row(c, t, tabs, linked, "mentioned"))))
-        .children(ordered.flatMap((g) => [this.board(g, t, g.board === here), ...g.cards.map((c) => this.row(c, t, tabs, linked))]))
+        .children(ordered.flatMap((g) => [this.board(g, t, g.board === here, chosen), ...g.cards.map((c) => this.row(c, t, tabs, linked))]))
         .when(found > drawn, (e) => e.child(div().px(10).py(10).text_size(11).text_color(t.dim).child(`${found - drawn} older cards not shown: type in the filter to find them`)))
         .when(!drawn, (e) => e.child(div().px(16).py(28).text_size(12).text_center().text_color(this.error ? t.ansi1 : t.dim).child(empty))))
       .child(div().flex_none().px(12).py(6).border_t(1).border_color(t.border).text_size(11).text_color(t.dim)

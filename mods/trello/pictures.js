@@ -1,6 +1,7 @@
 import * as fs from "fs/promises";
-import { appHome, exec } from "herdr";
-import { credentials } from "./api.js";
+import { createHash } from "crypto";
+import { appHome } from "herdr";
+import { download } from "./api.js";
 
 // The markdown view draws no images, so the screenshots on a card are cut out of the text and
 // drawn between its runs, from a copy in the data folder (Herdr draws images only from its home).
@@ -48,34 +49,23 @@ function dimensions(b) {
 }
 
 const pictures = {};
-const hash = (s) => [...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 2166136261).toString(16);
-// Trello serves uploads only to its key and token; every other host gets no credentials.
-const private_ = (url) => /^https:\/\/(api\.)?trello\.com\//.test(url);
+const hash = (s) => createHash("sha1").update(s).digest("hex").slice(0, 20);
 
 // { path (for image()), file, width, height } once downloaded; null before.
 export const picture = (url) => typeof pictures[url] === "object" ? pictures[url] : null;
 export const failed = (url) => pictures[url] === "missing";
 
 // Starts the download the first time a URL is asked for: a promise that resolves once it's
-// ready or failed. The OAuth header goes through a file of its own, so the token never shows
-// up in a process list, and the file goes again right after.
+// ready or failed (Trello's own URLs go with the key and token, see download()).
 export function loadPicture(url) {
   if (pictures[url] !== undefined) return null;
   pictures[url] = "loading";
   return (async () => {
     const dir = `${appHome()}/data/trello/images`, path = `data/trello/images/${hash(url)}.png`, file = `${appHome()}/${path}`;
-    const header = `${dir}/.auth-${hash(url)}`;
     try {
       if (!await fs.exists(file)) {
         await fs.mkdir(dir, { recursive: true });
-        const args = ["-sfL", "--max-time", "30", "-o", file, url];
-        if (private_(url)) {
-          const { key, token } = await credentials();
-          await fs.writeFile(header, `Authorization: OAuth oauth_consumer_key="${key}", oauth_token="${token}"\n`);
-          args.unshift("-H", `@${header}`);
-        }
-        const r = await exec("curl", args).finally(() => fs.unlink(header).catch(() => null));
-        if (r.code !== 0) throw new Error("download failed");
+        if (!await download(url, file)) throw new Error("download failed");
       }
       const size = dimensions(await fs.readFile(file));
       if (!size?.width || !size?.height) throw new Error("not an image");

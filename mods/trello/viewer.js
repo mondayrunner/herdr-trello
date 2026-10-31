@@ -1,8 +1,8 @@
-import { div, svg, image } from "gpui-kit";
+import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
 import { exec, theme, closeOverlay, openOverlay, setShared } from "herdr";
-import { trello, short } from "./api.js";
-import { icons, icon } from "./icons.js";
+import { trello, short, CHANGED } from "./api.js";
+import { glyph, spinner } from "./icons.js";
 import { blocks, picture, failed, loadPicture } from "./pictures.js";
 import { start, tabOf, goTo, pickRepo } from "./start.js";
 
@@ -10,7 +10,7 @@ const FIELDS = [
   "fields=name,desc,due,dueComplete,labels,shortUrl,idShort,idList,idBoard",
   "members=true&member_fields=fullName,username,initials,avatarUrl",
   "checklists=all&checklist_fields=name,pos&checkItems=all&checkItem_fields=name,state,pos",
-  "attachments=true&attachment_fields=name,url,fileName,isUpload,bytes,mimeType,date",
+  "attachments=true&attachment_fields=name,url,fileName,isUpload,bytes,mimeType",
   "actions=commentCard,updateCard:idList,createCard,addAttachmentToCard&actions_limit=100",
   "action_memberCreator_fields=fullName,username,initials,avatarUrl",
   "list=true&list_fields=name&board=true&board_fields=name,shortUrl",
@@ -47,7 +47,7 @@ export function copyMenu({ url, number, title }, at) {
     props: { copyMenu: { url, ref: `#${number} ${title}`, title } } });
 }
 
-export function labelChip(l, t) {
+function labelChip(l, t) {
   const c = LABELS[(l.color ?? "").replace(/_(light|dark)$/, "")] ?? t.muted;
   return div().h(22).px(8).flex_none().flex().items_center().rounded(11).border_1().border_color(`${c}66`).bg(`${c}2e`)
     .text_size(12).font_semibold().text_color(c).child(l.name || " ");
@@ -75,7 +75,7 @@ export class Viewer {
     this.reply.set_auto_grow(3, 12);
     this.reply.on("change", (_e, cx) => { const has = Boolean(this.reply.value().trim()); if (has !== this.replying) { this.replying = has; cx.notify(); } });
     this.reply.on("submit", (e, cx) => { if (e.secondary) this.comment(cx); });
-    cx.spawn(async (cx) => { await icons(); this.icons = true; cx.notify(); });
+    this.parts = new Map();
     this.load(cx);
   }
 
@@ -88,8 +88,9 @@ export class Viewer {
     });
   }
 
-  // A write to Trello, then a reload of the card and a nudge to the panel.
-  change(label, write, cx) {
+  // A write to Trello, then a reload of the card (unless what's shown is already right) and a nudge
+  // to the panel, which fetches that board again.
+  change(label, write, cx, { reload = true } = {}) {
     if (this.busy) return;
     this.busy = label; this.error = null;
     cx.spawn(async (cx) => {
@@ -97,8 +98,8 @@ export class Viewer {
       catch (e) { this.error = String(e?.message ?? e); }
       finally {
         this.busy = null;
-        setShared("trello.changed", { board: this.card.boardId, at: Date.now() });
-        this.load(cx);
+        setShared(CHANGED, { board: this.card.boardId, at: Date.now() });
+        if (reload || this.error) this.load(cx); else cx.notify();
       }
     });
     cx.notify();
@@ -113,12 +114,12 @@ export class Viewer {
     }, cx);
   }
 
-  // Shown at once; the reload after Trello answers confirms it.
+  // Shown at once; only a failed write reloads the card.
   tick(item, cx) {
     if (this.busy) return;
     const state = item.state === "complete" ? "incomplete" : "complete";
     item.state = state;
-    this.change("Saving", () => trello(`cards/${this.card.id}/checkItem/${item.id}`, { method: "PUT", params: { state } }), cx);
+    this.change("Saving", () => trello(`cards/${this.card.id}/checkItem/${item.id}`, { method: "PUT", params: { state } }), cx, { reload: false });
   }
 
   move(list, cx) {
@@ -142,7 +143,7 @@ export class Viewer {
     if (this.starting) return;
     this.starting = true; this.error = null;
     cx.spawn(async (cx) => {
-      try { if (await start(this.card, this.repo)) closeOverlay(this.overlay); }
+      try { if (await start(this.card, this.repo, this.full)) closeOverlay(this.overlay); }
       catch (e) { this.error = String(e?.message ?? e); }
       finally { this.starting = false; cx.notify(); }
     });
@@ -158,43 +159,42 @@ export class Viewer {
 
   // ---- drawing ----
 
-  glyph(name, size, color) { return div().size(size).flex_none().when(this.icons, (e) => e.child(svg(icon(name)).size(size).text_color(color))); }
-
   button(id, label, t, onClick, { primary = false, enabled = true, glyph = null } = {}) {
     const solid = primary && enabled;
     return h_flex().id(id).h(32).px(12).gap(6).flex_none().items_center().justify_center().rounded(7).text_size(13).font_medium()
       .bg(solid ? t.solid : t.raised).border_1().border_color(solid ? t.solid : t.border).text_color(solid ? t.solid_foreground : enabled ? t.foreground : t.dim)
       .when(enabled, (e) => e.cursor_pointer().hover((s) => s.opacity(0.88)).on_click(onClick))
-      .when(Boolean(glyph), (e) => e.child(this.glyph(glyph, 14, solid ? t.solid_foreground : t.muted)))
+      .when(Boolean(glyph), (e) => e.child(glyph(glyph, 14, solid ? t.solid_foreground : t.muted)))
       .when(label !== "", (e) => e.child(label));
+  }
+
+  // The downloaded picture, or null while it loads (a redraw follows once it's there).
+  ensure(url, cx) {
+    const loading = loadPicture(url);
+    if (loading) cx.spawn(async (cx) => { await loading; cx.notify(); });
+    return picture(url);
   }
 
   // A member's Trello picture, else their initials on a tint of their own.
   person(m, size, t, cx) {
-    const url = m?.avatarUrl ? `${m.avatarUrl}/50.png` : null;
-    if (url) {
-      const loading = loadPicture(url);
-      if (loading) cx.spawn(async (cx) => { await loading; cx.notify(); });
-      const p = picture(url);
-      if (p) return image(p.path).size(size).flex_none().rounded(size / 2);
-    }
+    const p = m?.avatarUrl ? this.ensure(`${m.avatarUrl}/50.png`, cx) : null;
+    if (p) return image(p.path).size(size).flex_none().rounded(size / 2);
     const name = m?.fullName ?? m?.username ?? "?", colors = [t.ansi1, t.ansi2, t.ansi3, t.ansi4, t.ansi5, t.ansi6];
     const color = colors[[...name].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7) % colors.length];
     return div().size(size).flex_none().rounded(size / 2).flex().items_center().justify_center().bg(color + "33")
       .text_size(Math.round(size * 0.42)).font_semibold().text_color(color).child((m?.initials ?? name.slice(0, 1)).toUpperCase());
   }
 
-  // Markdown with its images drawn in between the text.
+  // Markdown with its images drawn in between the text; the split is kept per text, not redone per render.
   markdown(key, text, t, cx) {
-    return v_flex().gap(12).children(blocks(text).map((b, n) => b.image ? this.picture(`${key}-${n}`, b.image, b.alt, t, cx)
+    if (!this.parts.has(text)) this.parts.set(text, blocks(text));
+    return v_flex().gap(12).children(this.parts.get(text).map((b, n) => b.image ? this.picture(`${key}-${n}`, b.image, b.alt, t, cx)
       : TextView.markdown(`${key}-${n}`, b.text).selectable(true).on_link_click((url) => openUrl(url))));
   }
 
   // At its own width, never wider than the column; a click opens the file.
   picture(key, url, alt, t, cx, max = null) {
-    const loading = loadPicture(url);
-    if (loading) cx.spawn(async (cx) => { await loading; cx.notify(); });
-    const p = picture(url);
+    const p = this.ensure(url, cx);
     if (!p) return div().h(failed(url) ? 36 : 120).w(max ?? 320).flex_none().rounded(8).border_1().border_color(t.border).bg(t.raised)
       .flex().items_center().justify_center().px(12).text_size(12).text_color(t.muted).truncate()
       .child(failed(url) ? `Image could not be loaded${alt ? `: ${alt}` : ""}` : "Loading image…");
@@ -205,7 +205,7 @@ export class Viewer {
   section(title, glyph, t, body, extra = null) {
     return v_flex().flex_none().gap(10)
       .child(h_flex().gap(8).items_center().text_size(15).font_semibold()
-        .child(this.glyph(glyph, 16, t.muted)).child(title)
+        .child(glyph(glyph, 16, t.muted)).child(title)
         .when(Boolean(extra), (e) => e.child(div().text_size(13).font_normal().text_color(t.muted).child(extra))))
       .child(body);
   }
@@ -220,7 +220,7 @@ export class Viewer {
           .hover((s) => s.bg(t.hover)).on_click((_e, cx) => this.tick(i, cx))
           .child(div().mt(2).size(16).flex_none().rounded(4).border_1().border_color(i.state === "complete" ? t.ansi2 : t.input)
             .bg(i.state === "complete" ? t.ansi2 : t.background).flex().items_center().justify_center()
-            .when(i.state === "complete", (e) => e.child(this.glyph("check", 12, t.background))))
+            .when(i.state === "complete", (e) => e.child(glyph("check", 12, t.background))))
           .child(div().flex_1().min_w(0).text_size(14).text_color(i.state === "complete" ? t.muted : t.foreground)
             .when(i.state === "complete", (e) => e.line_through()).child(i.name)))), `${done}/${items.length}`);
     });
@@ -237,7 +237,7 @@ export class Viewer {
           .child(div().w(200).text_size(12).text_color(t.muted).truncate().child(a.name))))))
       .children(files.map((a) => h_flex().id(`file-${a.id}`).px(10).py(8).gap(10).items_center().rounded(8).border_1().border_color(t.border)
         .cursor_pointer().hover((s) => s.bg(t.hover)).on_click(() => openUrl(a.url))
-        .child(this.glyph(a.isUpload ? "clip" : "external", 14, t.muted))
+        .child(glyph(a.isUpload ? "clip" : "external", 14, t.muted))
         .child(div().flex_1().min_w(0).text_size(13).truncate().child(a.name || a.url))
         .when(Boolean(a.bytes), (e) => e.child(div().text_size(12).text_color(t.muted).child(size(a.bytes)))))), `${all.length}`)];
   }
@@ -291,15 +291,15 @@ export class Viewer {
     const claude = h_flex().id("claude").h(40).gap(8).items_center().justify_center().rounded(8).text_size(14).font_semibold().cursor_pointer()
       .bg(open ? t.raised : t.solid).text_color(open ? t.foreground : t.solid_foreground).border_1().border_color(open ? t.border : t.solid)
       .hover((s) => s.opacity(0.88)).on_click((_e, cx) => this.claude(cx))
-      .child(this.starting || status === "working" ? svg("mods/workspace-chrome/spinner.svg").size(14).text_color(open ? t.working : t.solid_foreground).spin(900)
-        : open ? div().size(8).rounded(4).bg(t[status] ?? t.idle) : this.glyph("terminal", 16, t.solid_foreground))
+      .child(this.starting || status === "working" ? spinner(open ? t.working : t.solid_foreground, 14)
+        : open ? div().size(8).rounded(4).bg(t[status] ?? t.idle) : glyph("terminal", 16, t.solid_foreground))
       .child(this.starting ? "Writing the brief…" : open ? "Go to Claude tab" : "Start Claude");
     return v_flex().id("card-sidebar").w(280).flex_none().min_h(0).overflow_y_scrollbar().pl(8).pr(28).pt(16)
       .child(v_flex().flex_none().gap(10).pb(16).border_b(1).border_color(t.border)
         .child(claude)
         .child(h_flex().id("card-folder").gap(6).items_center().text_size(12).text_color(t.muted).cursor_pointer().hover((s) => s.text_color(t.foreground))
           .on_click((_e, cx) => this.folder(cx))
-          .child(this.glyph("folder", 13, t.muted)).child(div().flex_1().min_w(0).truncate().child(this.repo ? short(this.repo) : "Pick a folder for this board"))
+          .child(glyph("folder", 13, t.muted)).child(div().flex_1().min_w(0).truncate().child(this.repo ? short(this.repo) : "Pick a folder for this board"))
           .child(div().text_color(t.accent).child("Change"))))
       .child(this.side("List", t, v_flex().gap(4)
         .child(div().text_size(14).font_semibold().child(c?.list?.name ?? this.card.list ?? ""))
@@ -314,7 +314,7 @@ export class Viewer {
         : none("No one")))
       .child(this.side("Labels", t, (c?.labels ?? []).length ? h_flex().gap(4).flex_wrap().children(c.labels.map((l) => labelChip(l, t))) : none("No labels")))
       .child(this.side("Due", t, c?.due
-        ? h_flex().gap(6).items_center().text_size(13).child(this.glyph("clock", 14, t.muted)).child(day(c.due))
+        ? h_flex().gap(6).items_center().text_size(13).child(glyph("clock", 14, t.muted)).child(day(c.due))
           .when(c.dueComplete, (e) => e.child(div().text_color(t.ansi2).child("· done")))
           .when(!c.dueComplete && Date.parse(c.due) < Date.now(), (e) => e.child(div().text_color(t.ansi1).child("· overdue")))
         : none("No due date")));
@@ -326,7 +326,7 @@ export class Viewer {
       .child(div().text_size(13).text_color(t.muted).child(`${c?.board?.name ?? card.board} · ${c?.list?.name ?? card.list ?? ""}`))
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.ansi1).truncate().child(this.error ?? ""))
       .when(this.loading || Boolean(this.busy), (e) => e.child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
-        .child(svg("mods/workspace-chrome/spinner.svg").size(12).text_color(t.working).spin(900)).child(this.busy ?? "Refreshing")))
+        .child(spinner(t.working)).child(this.busy ?? "Refreshing")))
       .when(!this.loading && !this.busy, (e) => e.child(this.button("card-refresh", "Refresh", t, (_e, cx) => { this.load(cx); cx.notify(); }, { glyph: "refresh" })))
       .child(this.button("card-copy", "Copy", t, () => copyMenu({ url: card.url, number: card.number, title: c?.name ?? card.title }), { glyph: "copy" }))
       .child(this.button("card-trello", "Open in Trello", t, () => openUrl(card.url), { glyph: "external" }))

@@ -46,17 +46,17 @@ touch -h ~/.config/herdr-app/mods/trello
   "folders": ["~/Sites/clients", "~/Sites/products"],
   "attachments": "~/Downloads/trello",
   "repos": { "Acme Studio": "~/Sites/clients/acme-studio" },
-  "current": "Doing",
+  "current": ["Doing"],
   "done": ["Done", "Approved", "Archive"]
 }
 ```
 
 - `envFile`: holds `TRELLO_KEY` and `TRELLO_TOKEN`.
 - `folders`: where a board's folder is guessed. A folder matches on whole words, at least half of the board's words, or on the board's name run together.
-- `repos`: board name → folder. Picking a folder in the panel writes here.
+- `repos`: board name → folder, for boards the guess gets wrong. A folder picked in the panel is kept by Herdr itself and wins over this.
 - `attachments`: where a card's uploads go, in a folder `<board> #<number>`.
-- `current`: the list of open requests. A board with this list is a client board, and it names the first tab.
-- `done`: lists whose cards show dimmed.
+- `current`: the list name(s) of open requests, matched as whole names (an emoji in front doesn't count). A board with one is a client board; the first name labels the first tab.
+- `done`: list names whose cards show dimmed, matched the same way ("Undone" is not "Done").
 
 How the agent reports back is `REPORT` at the top of `mods/trello/brief.js`.
 

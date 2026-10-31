@@ -1,4 +1,5 @@
 import * as fs from "fs/promises";
+import { div, svg } from "gpui-kit";
 import { appHome } from "herdr";
 
 // Herdr draws images only from real folders, and this mod's folder is a
@@ -13,25 +14,31 @@ const ICONS = {
   terminal: SVG(`<rect x="3" y="4.5" width="18" height="15" rx="3.5"/><path d="M7.5 10l3 2.5-3 2.5"/><path d="M12.5 15.5h4"/>`),
   check: SVG(`<path d="M20 6 9 17l-5-5"/>`),
   list: SVG(`<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>`),
-  move: SVG(`<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>`),
   clip: SVG(`<path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>`),
   checklist: SVG(`<path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/>`),
   comment: SVG(`<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>`),
   folder: SVG(`<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>`),
   clock: SVG(`<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>`),
-  plus: SVG(`<path d="M5 12h14"/><path d="M12 5v14"/>`),
 };
 
-let written = null;
+let written = null, ready = false;
 
-// Resolves once the icons are on disk; draw them only after that.
+// Resolves once the icons are on disk; draw them only after that (a missing file would stay blank).
 export function icons() {
   written ??= (async () => {
     const dir = `${appHome()}/data/trello/icons`;
     await fs.mkdir(dir, { recursive: true });
-    for (const [name, svg] of Object.entries(ICONS)) await fs.writeFile(`${dir}/${name}.svg`, svg);
+    for (const [name, text] of Object.entries(ICONS)) await fs.writeFile(`${dir}/${name}.svg`, text);
+    ready = true;
   })();
   return written;
 }
 
-export const icon = (name) => `data/trello/icons/${name}.svg`;
+// An icon in a fixed square, empty until the files are written. Without a color it takes the text's.
+export const glyph = (name, size, color = null) => div().size(size).flex_none().when(ready, (e) => {
+  const icon = svg(`data/trello/icons/${name}.svg`).size(size);
+  return e.child(color ? icon.text_color(color) : icon);
+});
+
+// Herdr's own ring, turned natively (no timer, no redraws).
+export const spinner = (color, size = 12) => svg("mods/workspace-chrome/spinner.svg").size(size).flex_none().text_color(color).spin(900);

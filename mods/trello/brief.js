@@ -1,6 +1,6 @@
-import * as fs from "fs/promises";
+import { randomBytes } from "crypto";
 import { exec } from "herdr";
-import { localDay } from "./api.js";
+import { trello, download, localDay } from "./api.js";
 
 // One card turned into the first message for an agent: the whole card, its uploads on disk,
 // and the rules for reporting back. The card text sits between markers, because whoever writes
@@ -12,47 +12,42 @@ const REPORT = [
   "If you are blocked on something only the owner can decide, ask here in this session and wait. Then stop.",
 ];
 
-const FIELDS = "fields=name,desc,due,labels,shortUrl&checklists=all&checklist_fields=name&checkItems=all&attachments=true&attachment_fields=name,url,fileName,isUpload,bytes&actions=commentCard&actions_limit=50";
+export const FIELDS = "fields=name,desc,due,labels,shortUrl&checklists=all&checklist_fields=name&checkItems=all&attachments=true&attachment_fields=name,url,fileName,isUpload,bytes&actions=commentCard&actions_limit=50";
 const MAX_FILES = 10, MAX_BYTES = 25_000_000;
 
 const slug = (s) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "ticket";
 
-// Trello serves uploads only with the key and token in an OAuth header. curl reads that header
-// from a file (`header`, inside Herdr's data folder), so the token never shows up in a process
-// list; the file goes again right after. `dir` may be anywhere (Downloads): mkdir and curl make it.
-async function download(card, dir, header, auth) {
+// The uploads, up to ten of 25 MB each, into `dir` (may be anywhere, e.g. Downloads: mkdir makes it).
+// Numbered, so four uploads all called image.png stay four files.
+async function saveUploads(card, dir) {
   const uploads = card.attachments.filter((a) => a.isUpload && a.url && !(a.bytes > MAX_BYTES)).slice(0, MAX_FILES);
   if (!uploads.length) return;
-  await exec("mkdir", ["-p", dir]);
-  await fs.writeFile(header, `Authorization: OAuth oauth_consumer_key="${auth.key}", oauth_token="${auth.token}"\n`);
-  try {
-    for (const [i, a] of uploads.entries()) {
-      // Numbered, so four uploads all called image.png stay four files.
-      const path = `${dir}/${i + 1}-${String(a.fileName || a.name || "attachment").replace(/[^A-Za-z0-9._-]+/g, "-").slice(-60)}`;
-      const r = await exec("curl", ["-sfL", "--max-time", "20", "-H", `@${header}`, "-o", path, a.url]).catch(() => null);
-      if (r?.code === 0) a.path = path;
-    }
-  } finally { await fs.unlink(header).catch(() => null); }
+  await exec("mkdir", ["-p", "--", dir]);
+  for (const [i, a] of uploads.entries()) {
+    const path = `${dir}/${i + 1}-${String(a.fileName || a.name || "attachment").replace(/[^A-Za-z0-9._-]+/g, "-").slice(-60)}`;
+    if (await download(a.url, path, { seconds: 20 })) a.path = path;
+  }
 }
 
-// The brief for card `id`, worked on in `repo` for client `who`. `trello(path)` calls the API.
-// Returns { brief } or { empty: true } for a card without even a title.
-export async function brief(trello, auth, id, { repo, who, dir, header }) {
-  const c = await trello(`cards/${id}?${FIELDS}`);
+// The brief for card `id`, worked on in `repo` for client `who`. `c`: the card as Trello gave it
+// with at least FIELDS, when the caller already has it. Returns { brief }, or { empty: true } for a
+// card without even a title.
+export async function brief(id, { repo, who, dir, c = null }) {
+  c ??= await trello(`cards/${id}?${FIELDS}`);
   const card = {
     title: c.name ?? "", url: c.shortUrl, desc: c.desc ?? "", due: c.due ? localDay(c.due) : null,
     labels: (c.labels ?? []).map((l) => l.name).filter(Boolean),
     checklists: (c.checklists ?? []).map((cl) => ({ name: cl.name, items: (cl.checkItems ?? []).map((i) => ({ name: i.name, done: i.state === "complete" })) })),
-    comments: (c.actions ?? []).filter((a) => a.type === "commentCard").reverse().map((a) => ({ date: String(a.date).slice(0, 10), who: a.memberCreator?.fullName ?? "?", text: String(a.data?.text ?? "") })),
-    attachments: c.attachments ?? [],
+    comments: (c.actions ?? []).filter((a) => a.type === "commentCard").reverse().map((a) => ({ date: localDay(a.date), who: a.memberCreator?.fullName ?? "?", text: String(a.data?.text ?? "") })),
+    attachments: (c.attachments ?? []).map((a) => ({ ...a })),
   };
   const text = card.desc.trim() || card.checklists.some((cl) => cl.items.length) || card.comments.length;
   if (!text && !card.attachments.length && !card.title.trim()) return { empty: true };
-  await download(card, dir, header, auth);
+  await saveUploads(card, dir);
 
   // The markers around the card text carry a random tag, so a description that writes its own
   // "----- END CARD -----" can't close the data block and add rules of its own.
-  const mark = `CARD ${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+  const mark = `CARD ${randomBytes(5).toString("hex").toUpperCase()}`;
   // A card that is only a title is still a job ("fix the footer on mobile"): look first, and ask
   // when it can mean more than one thing.
   const rules = [
