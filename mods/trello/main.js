@@ -371,7 +371,7 @@ export default class Trello extends View {
           .on_mouse_down("left", (_e, cx) => cx.stop_propagation()).child(Input.new(this.input).h_full().text_size(12).text_color(t.foreground)))
         .child(h_flex().gap(6).items_center()
           .child(h_flex().flex_none().p(2).gap(2).rounded(8).border_1().border_color(t.border)
-            .children(Object.keys(VIEWS).map((v) => this.segment(`view-${v}`, loading ? label(v) : `${label(v)} ${this.counts[v] ?? 0}`, this.view === v, t, (_e, cx) => { this.view = v; cx.notify(); }))))))
+            .children(Object.keys(VIEWS).map((v) => this.segment(`view-${v}`, loading ? label(v) : `${label(v)} (${this.counts[v] ?? 0})`, this.view === v, t, (_e, cx) => { this.view = v; cx.notify(); }))))))
       .child(v_flex().id("trello-list").flex_1().min_h(0).overflow_y_scrollbar().p(6).gap(1)
         .when(Boolean(this.error) && drawn > 0, (e) => e.child(div().px(10).py(4).text_size(11).text_color(t.ansi1).child(this.error)))
         .when(this.mentioned.length > 0, (e) => e.child(this.heading("In this terminal", t))
