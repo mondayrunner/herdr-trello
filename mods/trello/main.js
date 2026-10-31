@@ -205,7 +205,9 @@ export default class Trello extends View {
         // Also after a failed sync: what did change (a board gone, one fetched) shows. Every redraw of
         // a mod redraws the whole window, so only when there's something new to show, or when the
         // last drawing showed "Syncing".
-        if (changed) { await this.rebuild(); await this.tell(); }
+        if (changed) await this.rebuild();
+        // The first sync takes note of what's there, so the first new request after it gets its toast.
+        if (changed || (this.meta && !this.meta.seen && this.cards.length)) await this.tell();
         this.syncing = false; this.resolve(cx);
         if (changed || this.error !== before || this.drewSyncing) cx.notify();
         // A change that came in during this sync gets one of its own.
