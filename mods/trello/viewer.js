@@ -159,12 +159,12 @@ export class Viewer {
 
   // ---- drawing ----
 
-  button(id, label, t, onClick, { primary = false, enabled = true, glyph = null } = {}) {
+  button(id, label, t, onClick, { primary = false, enabled = true, icon = null } = {}) {
     const solid = primary && enabled;
     return h_flex().id(id).h(32).px(12).gap(6).flex_none().items_center().justify_center().rounded(7).text_size(13).font_medium()
       .bg(solid ? t.solid : t.raised).border_1().border_color(solid ? t.solid : t.border).text_color(solid ? t.solid_foreground : enabled ? t.foreground : t.dim)
       .when(enabled, (e) => e.cursor_pointer().hover((s) => s.opacity(0.88)).on_click(onClick))
-      .when(Boolean(glyph), (e) => e.child(glyph(glyph, 14, solid ? t.solid_foreground : t.muted)))
+      .when(Boolean(icon), (e) => e.child(glyph(icon, 14, solid ? t.solid_foreground : t.muted)))
       .when(label !== "", (e) => e.child(label));
   }
 
@@ -202,10 +202,10 @@ export class Viewer {
     return div().id(key).flex_none().cursor_pointer().on_click(() => openFile(p.file)).child(image(p.path).w(w).h(h).rounded(8));
   }
 
-  section(title, glyph, t, body, extra = null) {
+  section(title, icon, t, body, extra = null) {
     return v_flex().flex_none().gap(10)
       .child(h_flex().gap(8).items_center().text_size(15).font_semibold()
-        .child(glyph(glyph, 16, t.muted)).child(title)
+        .child(glyph(icon, 16, t.muted)).child(title)
         .when(Boolean(extra), (e) => e.child(div().text_size(13).font_normal().text_color(t.muted).child(extra))))
       .child(body);
   }
@@ -327,10 +327,10 @@ export class Viewer {
       .child(div().flex_1().min_w(0).text_size(12).text_color(t.ansi1).truncate().child(this.error ?? ""))
       .when(this.loading || Boolean(this.busy), (e) => e.child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
         .child(spinner(t.working)).child(this.busy ?? "Refreshing")))
-      .when(!this.loading && !this.busy, (e) => e.child(this.button("card-refresh", "Refresh", t, (_e, cx) => { this.load(cx); cx.notify(); }, { glyph: "refresh" })))
-      .child(this.button("card-copy", "Copy", t, () => copyMenu({ url: card.url, number: card.number, title: c?.name ?? card.title }), { glyph: "copy" }))
-      .child(this.button("card-trello", "Open in Trello", t, () => openUrl(card.url), { glyph: "external" }))
-      .child(this.button("card-close", "", t, () => closeOverlay(this.overlay), { glyph: "close" }));
+      .when(!this.loading && !this.busy, (e) => e.child(this.button("card-refresh", "Refresh", t, (_e, cx) => { this.load(cx); cx.notify(); }, { icon: "refresh" })))
+      .child(this.button("card-copy", "Copy", t, () => copyMenu({ url: card.url, number: card.number, title: c?.name ?? card.title }), { icon: "copy" }))
+      .child(this.button("card-trello", "Open in Trello", t, () => openUrl(card.url), { icon: "external" }))
+      .child(this.button("card-close", "", t, () => closeOverlay(this.overlay), { icon: "close" }));
     const title = c?.name ?? card.title, labels = c?.labels ?? [];
     return v_flex().id("card").size_full().min_h(0).bg(t.background).text_color(t.foreground).text_size(14)
       .on_size_change((size, cx) => { if (size.width !== this.width) { this.width = size.width; cx.notify(); } })
