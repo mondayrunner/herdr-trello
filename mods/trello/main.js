@@ -2,7 +2,7 @@ import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
-import { icons, glyph, spinner } from "./icons.js";
+import { icons, glyph, icon, spinner } from "./icons.js";
 import { DEFAULTS, CHANGED, settings, reload, trello, data, expand, short, localDay, inside, picked } from "./api.js";
 import { tabIndex, links, pickRepo } from "./start.js";
 import { Viewer, copyMenu, openUrl } from "./viewer.js";
@@ -285,22 +285,24 @@ export default class Trello extends View {
     return (this.hereBoard = match ?? null);
   }
 
+  // The row takes the panel's 13px foreground text; only what differs sets its own. The ↗ box
+  // centres its 12px icon by padding; without a status mark it sits in the row itself, 1px down
+  // as it would be centred in the 18px trailing box.
   row(c, t, tabs, linked, where = "card") {
     const open = linked[c.id] ? tabs().get(linked[c.id]) : null, status = open?.tab.status;
-    const mark = status === "working" ? spinner(t.working) : open ? div().size(7).flex_none().rounded(4).bg(t[status] ?? t.idle) : null;
+    const mark = status === "working" ? spinner(t.working) : open ? div().size(7).rounded(4).bg(t[status] ?? t.idle) : null;
+    const browse = div().id(`${where}-browse-${c.id}`).size(16).p(2).text_color(t.dim)
+      .hover((s) => s.text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+      .on_click((_e, cx) => { cx.stop_propagation(); openUrl(c.url); })
+      .children(icon("external", 12));
     return h_flex().id(`${where}-${c.id}`).flex_none().px(10).py(6).gap(8).items_start().rounded(7).cursor_pointer()
       .hover((s) => s.bg(t.hover)).on_click(() => this.open(c))
       .on_mouse_down("right", () => copyMenu({ url: c.url, number: c.number, title: c.title }, "pointer"))
       .child(div().flex_none().w(34).text_color(t.dim).child(`#${c.number}`))
       .child(v_flex().flex_1().min_w(0).gap(2)
-        .child(div().text_color(c.done ? t.muted : t.foreground).child(c.title))
+        .child(c.done ? div().text_color(t.muted).child(c.title) : c.title)
         .child(div().text_size(11).text_color(c.due && Date.parse(c.due) < Date.now() ? t.ansi1 : t.dim).truncate().child(where === "card" ? c.meta : `${c.board} · ${c.meta}`)))
-      .child(h_flex().flex_none().h(18).gap(6).items_center()
-        .when(Boolean(mark), (e) => e.child(mark))
-        .child(div().id(`${where}-browse-${c.id}`).size(16).flex().items_center().justify_center().rounded(4).text_color(t.dim)
-          .hover((s) => s.text_color(t.foreground)).on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-          .on_click((_e, cx) => { cx.stop_propagation(); openUrl(c.url); })
-          .child(glyph("external", 12))));
+      .child(mark ? h_flex().flex_none().h(18).gap(6).child(mark).child(browse) : browse.flex_none().mt(1));
   }
 
   heading(label, t) {
@@ -310,11 +312,11 @@ export default class Trello extends View {
   // The board name opens the board; the folder (or "no folder") picks another folder for it.
   board(g, t, here, chosen) {
     const repo = this.repoOf(g.board, chosen);
-    return h_flex().flex_none().px(10).pt(10).pb(4).gap(8).items_center()
+    return h_flex().flex_none().px(10).pt(10).pb(4).gap(8).text_size(11)
       .when(here, (e) => e.child(div().size(6).flex_none().rounded(3).bg(t.accent)))
-      .child(div().id(`board-${g.board}`).flex_none().cursor_pointer().text_size(11).font_semibold().text_color(here ? t.foreground : t.muted)
+      .child(div().id(`board-${g.board}`).flex_none().cursor_pointer().font_semibold().text_color(here ? t.foreground : t.muted)
         .hover((s) => s.text_color(t.foreground)).on_click(() => openUrl(g.url)).child(g.board))
-      .child(div().id(`folder-${g.board}`).flex_1().min_w(0).cursor_pointer().text_size(11).text_right().truncate()
+      .child(div().id(`folder-${g.board}`).flex_1().min_w(0).cursor_pointer().text_right().truncate()
         .text_color(repo === null ? t.ansi3 : t.dim).hover((s) => s.text_color(t.foreground))
         .on_click((_e, cx) => cx.spawn(async () => { await pickRepo(g.board); }))
         .child(repo === undefined ? "" : repo === null ? "no folder" : short(repo)));

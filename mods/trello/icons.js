@@ -40,5 +40,9 @@ export const glyph = (name, size, color = null) => div().size(size).flex_none().
   return e.child(color ? icon.text_color(color) : icon);
 });
 
+// The bare icon as an optional child list (`.children(icon(...))`): nothing until the files are
+// written. For a box that already has its size, so no square of its own; takes the text's color.
+export const icon = (name, size) => ready ? [svg(`data/trello/icons/${name}.svg`).size(size)] : [];
+
 // Herdr's own ring, turned natively (no timer, no redraws).
 export const spinner = (color, size = 12) => svg("mods/workspace-chrome/spinner.svg").size(size).flex_none().text_color(color).spin(900);
