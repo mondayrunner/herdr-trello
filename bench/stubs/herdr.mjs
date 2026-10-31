@@ -25,3 +25,4 @@ export const pickFolder = async () => null;
 export const exec = async () => ({ code: 0, stdout: "", stderr: "" });
 export const hc = async () => ({ code: 0, stdout: env.terminalText ?? "", stderr: "" });
 export const readTextFile = async (path) => readFile(path, "utf8").catch(() => null);
+export const nextCommand = () => new Promise(() => {});  // nobody clicks in the bench

@@ -1,10 +1,10 @@
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
-import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay } from "herdr";
+import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay, nextCommand } from "herdr";
 import * as fs from "fs/promises";
 import { icons, glyph, icon, spinner } from "./icons.js";
 import { DEFAULTS, settings, reload, trello, data, expand, short, localDay, inside } from "./api.js";
-import { tabIndex, state, links, picked, pickRepo, migrate } from "./start.js";
+import { tabIndex, state, links, picked, pickRepo, migrate, announce } from "./start.js";
 import { Viewer, copyMenu, openUrl } from "./viewer.js";
 
 const SHOWN = 100;                    // rows drawn at most; the filter narrows the rest
@@ -73,6 +73,18 @@ export default class Trello extends View {
       const panels = shared("workspace.panels") ?? ["files", "changes"];
       if (!panels.includes("trello")) setShared("workspace.panels", [...panels, "trello"]);
       this.button = true;
+      // A click on a "New request" toast runs trello.newest. Commands reach only copies on screen,
+      // and the button always is: it shows the panel and opens that card.
+      cx.spawn(async () => {
+        for (;;) {
+          const c = await nextCommand();
+          const newest = state().newest;
+          if (!String(c).endsWith("newest") || !newest) continue;
+          run("layout.select", { stack: "panel-body", child: "trello" });
+          run("layout.show", { id: "panel" });
+          openOverlay({ mod: "trello", kind: "dialog", width: 0.86, height: 0.9, props: newest });
+        }
+      });
       return;
     }
     this.boards = {}; this.cards = []; this.counts = {}; this.repos = {}; this.mentioned = [];
@@ -82,7 +94,9 @@ export default class Trello extends View {
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
     this.input.on("blur", (_e, cx) => { this.typing = false; cx.notify(); });
     this.refresh(cx);
-    cx.timer.every(SYNC, (cx) => { if (panelShown()) this.refresh(cx); });
+    // Also while the panel is hidden, so a new request still gets its toast: a sync is one call for
+    // the boards, and cards only for boards that changed.
+    cx.timer.every(SYNC, (cx) => this.refresh(cx));
     cx.timer.every(SCAN, (cx) => { if (panelShown()) this.scan(cx); });
   }
 
@@ -191,13 +205,28 @@ export default class Trello extends View {
         // Also after a failed sync: what did change (a board gone, one fetched) shows. Every redraw of
         // a mod redraws the whole window, so only when there's something new to show, or when the
         // last drawing showed "Syncing".
-        if (changed) await this.rebuild();
+        if (changed) { await this.rebuild(); await this.tell(); }
         this.syncing = false; this.resolve(cx);
         if (changed || this.error !== before || this.drewSyncing) cx.notify();
         // A change that came in during this sync gets one of its own.
         if (this.stale) { const s = this.stale; this.stale = null; this.refresh(cx, s); }
       }
     });
+  }
+
+  // A toast for each card that's new in the current list (yours or nobody's) since the last sync,
+  // also for ones that came while Herdr was closed. The first sync ever only takes note.
+  async tell() {
+    const now = this.cards.filter(VIEWS.current.has), seen = this.meta.seen;
+    this.meta.seen = now.map((c) => c.id);
+    await fs.writeFile(metaFile(), JSON.stringify(this.meta)).catch(() => null);
+    if (!seen) return;
+    const known = new Set(seen), fresh = now.filter((c) => !known.has(c.id));
+    for (const c of fresh.slice(0, 3)) {
+      announce(c, this.repoOf(c.board) ?? null);
+      notify({ title: `New request · ${c.board}`, body: `#${c.number} ${c.title}`, level: "info", timeout: 15000, action: { name: "trello.newest" } });
+    }
+    if (fresh.length > 3) notify({ title: `${fresh.length - 3} more new requests`, body: "In the Trello panel", level: "info", timeout: 15000 });
   }
 
   // Refresh: settings, token and folders read again, and every board fetched again.

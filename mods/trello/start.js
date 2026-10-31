@@ -18,6 +18,8 @@ const update = (part, value, merge = false) => {
 };
 export const pick = (board, folder) => update("repos", { [board]: folder }, true);
 export const nudge = (board) => update("changed", { board, at: Date.now() });
+// The newest request a toast told about: a click on the toast opens it (see the Trello button).
+export const announce = (card, repo) => update("newest", { card, repo });
 
 // What an older version (or another copy still on it) left in the old keys goes into the one key,
 // on every start of a copy, and the old key is emptied so it isn't merged again.
