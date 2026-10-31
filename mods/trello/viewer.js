@@ -1,10 +1,10 @@
 import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
-import { exec, theme, closeOverlay, openOverlay, setShared } from "herdr";
-import { trello, short, CHANGED } from "./api.js";
+import { exec, theme, closeOverlay, openOverlay } from "herdr";
+import { trello, short } from "./api.js";
 import { glyph, spinner } from "./icons.js";
 import { blocks, picture, failed, loadPicture } from "./pictures.js";
-import { start, tabOf, goTo, pickRepo } from "./start.js";
+import { start, tabOf, goTo, pickRepo, nudge } from "./start.js";
 
 const FIELDS = [
   "fields=name,desc,due,dueComplete,labels,shortUrl,idShort,idList,idBoard",
@@ -98,7 +98,7 @@ export class Viewer {
       catch (e) { this.error = String(e?.message ?? e); }
       finally {
         this.busy = null;
-        setShared(CHANGED, { board: this.card.boardId, at: Date.now() });
+        nudge(this.card.boardId);
         if (reload || this.error) this.load(cx); else cx.notify();
       }
     });

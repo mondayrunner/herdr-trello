@@ -3,8 +3,8 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { hc, run, layout, theme, notify, props, focused, shared, setShared, openOverlay, closeOverlay } from "herdr";
 import * as fs from "fs/promises";
 import { icons, glyph, icon, spinner } from "./icons.js";
-import { DEFAULTS, CHANGED, settings, reload, trello, data, expand, short, localDay, inside, picked } from "./api.js";
-import { tabIndex, links, pickRepo } from "./start.js";
+import { DEFAULTS, settings, reload, trello, data, expand, short, localDay, inside } from "./api.js";
+import { tabIndex, state, links, picked, pickRepo, migrate } from "./start.js";
 import { Viewer, copyMenu, openUrl } from "./viewer.js";
 
 const SHOWN = 100;                    // rows drawn at most; the filter narrows the rest
@@ -52,6 +52,7 @@ function panelShown(root = layout()) {
 export default class Trello extends View {
   init(_props, cx) {
     const p = props() ?? {};
+    migrate();
     cx.spawn(async (cx) => { await icons(); cx.notify(); });
     if (p.card) { this.viewer = new Viewer(p, p.overlay, cx); return; }
     if (p.copyMenu) { this.copying = { ...p.copyMenu, overlay: p.overlay }; return; }
@@ -63,7 +64,7 @@ export default class Trello extends View {
       return;
     }
     this.boards = {}; this.cards = []; this.counts = {}; this.repos = {}; this.mentioned = [];
-    this.view = "current"; this.query = ""; this.changedAt = shared(CHANGED)?.at;
+    this.view = "current"; this.query = ""; this.changedAt = state().changed?.at;
     this.input = InputState.new({ placeholder: "Filter cards" });
     this.input.on("change", (_e, cx) => { this.query = this.input.value(); cx.notify(); });
     this.input.on("focus", (_e, cx) => { this.typing = true; cx.notify(); });
@@ -339,8 +340,8 @@ export default class Trello extends View {
     this.wasShown = shownNow;
     if (!shownNow) return div();
     const t = theme();
-    // The card dialog wrote to a card: fetch that board again.
-    const changed = shared(CHANGED);
+    // The card dialog wrote to a card: fetch that board again. The shared state is read once per redraw.
+    const s = state(), changed = s.changed;
     if (changed?.at && changed.at !== this.changedAt) {
       this.changedAt = changed.at;
       this.refresh(cx, changed.board);
@@ -349,7 +350,7 @@ export default class Trello extends View {
 
     const { found, groups } = this.shown(), drawn = groups.reduce((n, g) => n + g.cards.length, 0);
     // The spaces are asked for only when a drawn card has a tab.
-    const linked = links(), chosen = picked(), here = this.here(chosen);
+    const linked = links(s), chosen = picked(s), here = this.here(chosen);
     let index = null;
     const tabs = () => (index ??= tabIndex());
     const ordered = here ? [...groups.filter((g) => g.board === here), ...groups.filter((g) => g.board !== here)] : groups;

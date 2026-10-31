@@ -1,11 +1,32 @@
 import { spaces, panes, run, notify, pickFolder, shared, setShared } from "herdr";
-import { settings, pick, expand, short, inside } from "./api.js";
+import { settings, expand, short, inside } from "./api.js";
 import { brief } from "./brief.js";
 
-// Which tab each card got, shared by the panel and the card dialog and kept across restarts.
-// The link survives renaming the card or the tab.
-const LINKS = "trello.links";
-export const links = () => shared(LINKS) ?? {};
+// The mod's shared state, one key so a redraw asks Herdr once, seen by the panel and the card
+// dialog and kept across restarts: `links` (card id → its tab; survives renaming the card or the
+// tab), `repos` (board name → folder picked in the panel or dialog) and `changed` ({ board, at }:
+// the dialog wrote to a card on that board).
+const KEY = "trello";
+const OLD = { links: "trello.links", repos: "trello.repos" };  // the keys before there was one
+export const state = () => shared(KEY) ?? {};
+export const links = (s = state()) => s.links ?? {};
+export const picked = (s = state()) => s.repos ?? {};
+// Read-modify-write of the whole value; `part` gets `value`, or `{ ...part, ...value }` with `merge`.
+const update = (part, value, merge = false) => {
+  const s = state();
+  setShared(KEY, { ...s, [part]: merge ? { ...s[part], ...value } : value });
+};
+export const pick = (board, folder) => update("repos", { [board]: folder }, true);
+export const nudge = (board) => update("changed", { board, at: Date.now() });
+
+// What an older version (or another copy still on it) left in the old keys goes into the one key,
+// on every start of a copy, and the old key is emptied so it isn't merged again.
+export function migrate() {
+  for (const [part, key] of Object.entries(OLD)) {
+    const old = shared(key);
+    if (old && typeof old === "object" && Object.keys(old).length) { update(part, old, true); setShared(key, null); }
+  }
+}
 
 const tabName = (card) => {
   const name = `#${card.number} ${card.title}`;
@@ -62,7 +83,7 @@ export async function start(card, repo, raw = null) {
   const taken = new Set(Object.values(links()));
   const now = space ? spaces().find((s) => s.id === space.id) : spaces().find((s) => s.folder === repo);
   const tab = now?.tabs.find((t) => t.name === name && !taken.has(t.id));
-  if (tab) setShared(LINKS, { ...links(), [card.id]: tab.id });
+  if (tab) update("links", { [card.id]: tab.id }, true);
   notify({ title: "Claude is on it", body: `#${card.number} ${card.title} · ${short(repo)}`, level: "success", timeout: 3000 });
   return repo;
 }
