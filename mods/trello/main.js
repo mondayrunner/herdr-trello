@@ -21,6 +21,18 @@ const STOP = new Set(["nl", "com", "the", "de", "het", "van", "den", "der", "en"
 const words = (s) => s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !STOP.has(w));
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, "");
 const CARD_LINK = /trello\.com\/c\/([A-Za-z0-9]{8})/g;
+const newest = (a, b) => b.active - a.active;
+// Two newest-first lists as one.
+function merge(a, b) {
+  const out = new Array(a.length + b.length);
+  let i = 0, j = 0, k = 0;
+  while (i < a.length && j < b.length) out[k++] = a[i].active >= b[j].active ? a[i++] : b[j++];
+  while (i < a.length) out[k++] = a[i++];
+  while (j < b.length) out[k++] = b[j++];
+  return out;
+}
+// A call into Herdr that resolves later: the next step runs with a fresh script budget.
+const breathe = () => fs.exists(data()).catch(() => null);
 const shortLink = (url) => /\/c\/([A-Za-z0-9]{8})/.exec(url ?? "")?.[1];
 
 // The tabs: what's open now (yours and nobody's), everything of yours, everything.
@@ -81,32 +93,42 @@ export default class Trello extends View {
     await fs.mkdir(boardsDir(), { recursive: true });
     for (const f of (await fs.readdir(boardsDir())).filter((f) => f.endsWith(".json"))) {
       const board = await fs.readFile(`${boardsDir()}/${f}`, "utf8").then(JSON.parse).catch(() => null);
-      if (board?.version === CACHE) this.boards[board.id] = board;
+      if (board?.version === CACHE) { board.cards.sort(newest); this.boards[board.id] = board; }
       else await fs.unlink(`${boardsDir()}/${f}`).catch(() => null);  // another version's cache: fetched again
     }
-    this.rebuild();
+    await this.rebuild();
   }
 
   // Everything derived from the boards, worked out once per change instead of on every render:
   // newest activity first, so a filtered list keeps that order without sorting again. Which lists
   // are current or done comes from the settings now, not from when the board was fetched.
-  // Kept light: Herdr cuts off a script that runs too long, and on a busy machine 1500 cards are a
-  // lot. Each list name is matched once (not once per card), everything is counted in one pass,
-  // and the results are put in place together at the end, so a cut-off never leaves half of them.
-  rebuild() {
+  // Herdr cuts off a script that runs too long without handing control back, and on a busy machine
+  // 1500 cards in one go is too long (one sort is ~17000 comparisons). So the work comes in small
+  // steps with a call into Herdr between them, each with a fresh budget: per board (its cards are
+  // already newest first), then the boards merged two by two. Each list name is matched once, and
+  // the results are put in place together at the end, so a cut-off never leaves half of them.
+  async rebuild() {
     const { isCurrent, isDone } = this.config, lists = new Map(), views = Object.entries(VIEWS);
-    const cards = [];
-    for (const b of Object.values(this.boards)) for (const c of b.cards) cards.push(c);
-    cards.sort((a, b) => b.active - a.active);
     const counts = Object.fromEntries(views.map(([v]) => [v, 0])), byLink = new Map();
-    for (const c of cards) {
-      let kind = lists.get(c.list);
-      if (!kind) lists.set(c.list, (kind = { current: isCurrent(c.list), done: isDone(c.list) }));
-      c.current = kind.current; c.done = kind.done;
-      for (const [v, { has }] of views) if (has(c)) counts[v]++;
-      byLink.set(shortLink(c.url), c);
+    let runs = [];
+    for (const b of Object.values(this.boards)) {
+      for (const c of b.cards) {
+        let kind = lists.get(c.list);
+        if (!kind) lists.set(c.list, (kind = { current: isCurrent(c.list), done: isDone(c.list) }));
+        c.current = kind.current; c.done = kind.done;
+        for (const [v, { has }] of views) if (has(c)) counts[v]++;
+        byLink.set(shortLink(c.url), c);
+      }
+      runs.push(b.cards);
+      await breathe();
     }
-    this.cards = cards; this.counts = counts; this.byLink = byLink; this.memo = null;
+    while (runs.length > 1) {
+      const next = [];
+      for (let i = 0; i < runs.length; i += 2) next.push(i + 1 < runs.length ? merge(runs[i], runs[i + 1]) : runs[i]);
+      runs = next;
+      await breathe();
+    }
+    this.cards = runs[0] ?? []; this.counts = counts; this.byLink = byLink; this.memo = null;
   }
 
   // One board's cards in the shape the panel draws.
@@ -157,7 +179,7 @@ export default class Trello extends View {
           const lists = b.lists.map((l) => l.name).join("\n"), have = this.boards[b.id];
           if (!full && b.id !== stale && have && have.activity === b.dateLastActivity && have.lists === lists) continue;
           const raw = await trello(`boards/${b.id}/cards`, { params: { filter: "open", fields: "name,idShort,idList,idMembers,due,dueComplete,shortUrl,dateLastActivity,pos,labels" } });
-          const board = { version: CACHE, id: b.id, name: b.name, activity: b.dateLastActivity, lists, cards: this.normalize(b, raw) };
+          const board = { version: CACHE, id: b.id, name: b.name, activity: b.dateLastActivity, lists, cards: this.normalize(b, raw).sort(newest) };
           this.boards[b.id] = board; changed = true;
           await fs.writeFile(boardFile(b.id), JSON.stringify(board));
         }
@@ -169,7 +191,7 @@ export default class Trello extends View {
         // Also after a failed sync: what did change (a board gone, one fetched) shows. Every redraw of
         // a mod redraws the whole window, so only when there's something new to show, or when the
         // last drawing showed "Syncing".
-        if (changed) this.rebuild();
+        if (changed) await this.rebuild();
         this.syncing = false; this.resolve(cx);
         if (changed || this.error !== before || this.drewSyncing) cx.notify();
         // A change that came in during this sync gets one of its own.
