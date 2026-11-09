@@ -80,15 +80,30 @@ export async function trello(path, { method = "GET", params = {} } = {}) {
 const trelloHost = (url) => /^https:\/\/(api\.)?trello\.com\//.test(url);
 let headers = 0;
 
+// Header files that outlived their download (Herdr stopped the task before `finally` ran) hold the
+// key and token in plain text. Once per session, the first download clears any older than a minute;
+// a younger one may belong to a download still running in another copy.
+let swept = false;
+async function sweepHeaders() {
+  swept = true;
+  const dir = data(), now = Date.now();
+  for (const f of await fs.readdir(dir).catch(() => [])) {
+    const made = Number(/^\.auth-(\d+)-/.exec(f)?.[1]);  // the name holds when it was written
+    if (made && now - made > 60000) await fs.unlink(`${dir}/${f}`).catch(() => null);
+  }
+}
+
 // Downloads `url` to `out` with curl (fetch gives no bytes). For Trello's own URLs the OAuth header
-// goes through a file of its own, so the token never shows up in a process list, and the file goes
-// again right after. curl drops that header when a redirect leaves the host. Resolves true when saved.
+// goes through a file of its own, so the token never shows up in a process
+// list, and the file goes again right after. curl drops that header when a redirect leaves the host.
+// Resolves true when saved.
 export async function download(url, out, { seconds = 30 } = {}) {
   const args = ["-sfL", "--max-time", String(seconds), "-o", out, "--", url];
   const header = trelloHost(url) ? `${data()}/.auth-${Date.now()}-${headers++}` : null;
   if (header) {
     const { key, token } = await credentials();
     await fs.mkdir(data(), { recursive: true });
+    if (!swept) await sweepHeaders();
     await fs.writeFile(header, `Authorization: OAuth oauth_consumer_key="${key}", oauth_token="${token}"\n`);
     args.unshift("-H", `@${header}`);
   }
