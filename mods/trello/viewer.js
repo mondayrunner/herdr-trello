@@ -2,7 +2,7 @@ import * as fs from "fs/promises";
 import { div, image } from "gpui-kit";
 import { v_flex, h_flex, TextView, TextareaState, Textarea } from "gpui-base";
 import { exec, theme, closeOverlay, openOverlay } from "herdr";
-import { trello, short, data } from "./api.js";
+import { trello, short, data, agentName } from "./api.js";
 import { glyph, spinner } from "./icons.js";
 import { blocks, picture, failed, loadPicture } from "./pictures.js";
 import { start, tabOf, goTo, pickRepo, nudge } from "./start.js";
@@ -161,7 +161,7 @@ export class Viewer {
     cx.notify();
   }
 
-  // Start Claude on the card, or go to the tab it already has. The dialog closes so the tab shows.
+  // Start the agent on the card, or go to the tab it already has. The dialog closes so the tab shows.
   claude(cx) {
     const open = tabOf(this.card.id);
     if (open) { goTo(open); closeOverlay(this.overlay); return; }
@@ -318,7 +318,7 @@ export class Viewer {
       .hover((s) => s.opacity(0.88)).on_click((_e, cx) => this.claude(cx))
       .child(this.starting || status === "working" ? spinner(open ? t.working : t.solid_foreground, 14)
         : open ? div().size(8).rounded(4).bg(t[status] ?? t.idle) : glyph("terminal", 16, t.solid_foreground))
-      .child(this.starting ? "Writing the brief…" : open ? "Go to Claude tab" : "Start Claude");
+      .child(this.starting ? "Writing the brief…" : open ? `Go to ${agentName()} tab` : `Start ${agentName()}`);
     return v_flex().id("card-sidebar").w(280).flex_none().min_h(0).overflow_y_scrollbar().pl(8).pr(28).pt(16)
       .child(v_flex().flex_none().gap(10).pb(16).border_b(1).border_color(t.border)
         .child(claude)

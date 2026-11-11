@@ -6,6 +6,7 @@ export const DEFAULTS = {
   envFile: "~/.config/trello/.env",       // holds TRELLO_KEY and TRELLO_TOKEN
   folders: ["~/Sites/clients"],           // where a board's repo is guessed from its name
   attachments: "~/Downloads/trello",      // a card's uploads go to "<board> #<number>" in here
+  agent: ["claude"],                      // what a card's tab runs: the agent and its arguments
   repos: {},                              // board name → folder, for boards the guess gets wrong
   current: ["Doing"],                     // the list(s) of open requests; a board with one is a client board
   done: ["Done", "Approved", "Archive"],  // finished lists, shown dimmed
@@ -40,6 +41,13 @@ export async function settings() {
   }
   return config;
 }
+
+// The agent a card's tab runs, as a command line and as a name for buttons ("codex" is "Codex").
+export const agentArgv = (c) => [c.agent].flat();
+export const agentName = () => {
+  const cmd = agentArgv(config ?? DEFAULTS)[0].split("/").pop();
+  return cmd[0].toUpperCase() + cmd.slice(1);
+};
 
 // Read settings.json and the env file again on next use.
 export function reload() { config = null; auth = null; }

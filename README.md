@@ -2,12 +2,12 @@
 
 ![Herdr Trello: your Trello cards next to your terminals](social.png)
 
-A Trello panel for the [Herdr](https://herdr.dev) desktop app. It lists the cards on your client boards (what's in your Doing list now, yours, or everything), opens any card in a large view, and starts Claude on it in that client's repository, with the card as the brief. It stands on its own: Trello's API, `curl` and Claude, nothing else.
+A Trello panel for the [Herdr](https://herdr.dev) desktop app. It lists the cards on your client boards (what's in your Doing list now, yours, or everything), opens any card in a large view, and starts a coding agent on it in that client's repository, with the card as the brief: Claude Code by default, or Codex or any other agent Herdr runs. It stands on its own: Trello's API, `curl` and your agent, nothing else.
 
 - **Three tabs.** **Doing** (or whatever `current` names): the cards in that list on every client board, yours and unassigned ones (a board with that list is a client board). **Mine**: every card you're a member of on those boards, old ones included. **All**: every card on those boards. Finished cards (the `done` lists) show dimmed; the filter searches number, title, board, list and labels. The 100 most recently active matches are drawn.
 - **Cached like Herdr Issues.** One file per board, so the list shows at once. Every minute while the panel shows, one call lists the boards; only boards with new activity get their cards fetched again, and every 6 hours all of them.
-- **The card view.** A click opens the card as a dialog: the description with its images, checklists you can tick, attachments (images as previews), the comments and moves, and a box to comment. The sidebar has **Start Claude**, the folder, the list (with Move), members, labels and the due date.
-- **Start Claude.** The card view reads the whole card (description, checklists, comments), downloads its uploads to `~/Downloads/trello/<board> #<number>/`, and opens a new tab named `#<number> <title>` running `claude` with the brief as its first message. The card text sits between markers in the brief, so the agent reads it as the job and not as orders, and the brief asks for a comment on the card with the result; moving the card stays with you. The tab goes in the space already working in that folder, or a new space. Clicking the card again takes you to its tab, and the row shows that agent's status.
+- **The card view.** A click opens the card as a dialog: the description with its images, checklists you can tick, attachments (images as previews), the comments and moves, and a box to comment. The sidebar has **Start Claude** (or the agent you set), the folder, the list (with Move), members, labels and the due date.
+- **Start the agent.** The card view reads the whole card (description, checklists, comments), downloads its uploads to `~/Downloads/trello/<board> #<number>/`, and opens a new tab named `#<number> <title>` running `claude` (or what `agent` says) with the brief as its first message. The card text sits between markers in the brief, so the agent reads it as the job and not as orders, and the brief asks for a comment on the card with the result; moving the card stays with you. The tab goes in the space already working in that folder, or a new space. Clicking the card again takes you to its tab, and the row shows that agent's status.
 - **Folders.** Each board header shows the folder its cards are worked on in: the one you picked, else a guess from the folder names under `folders`. Click the folder (or "no folder") to pick another one with the system's folder picker; the choice is saved.
 - **In this terminal.** Trello card links on the focused terminal's screen (an agent's "commented on https://trello.com/c/…") show at the top.
 - **This folder first.** The board whose folder you're working in comes first, marked with a dot.
@@ -45,6 +45,7 @@ touch -h ~/.config/herdr-app/mods/trello
   "envFile": "~/.config/trello/.env",
   "folders": ["~/Sites/clients", "~/Sites/products"],
   "attachments": "~/Downloads/trello",
+  "agent": ["claude"],
   "repos": { "Acme Studio": "~/Sites/clients/acme-studio" },
   "current": ["Doing"],
   "done": ["Done", "Approved", "Archive"]
@@ -55,6 +56,7 @@ touch -h ~/.config/herdr-app/mods/trello
 - `folders`: where a board's folder is guessed. A folder matches on whole words, at least half of the board's words, or on the board's name run together.
 - `repos`: board name → folder, for boards the guess gets wrong. A folder picked in the panel is kept by Herdr itself and wins over this.
 - `attachments`: where a card's uploads go, in a folder `<board> #<number>`.
+- `agent`: what a card's tab runs, with its arguments. Default `["claude"]`; `["codex"]` starts Codex. The buttons and notices use its name.
 - `current`: the list name(s) of open requests, matched as whole names (an emoji in front doesn't count). A board with one is a client board; the first name labels the first tab.
 - `done`: list names whose cards show dimmed, matched the same way ("Undone" is not "Done").
 
