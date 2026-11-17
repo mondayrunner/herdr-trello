@@ -75,12 +75,23 @@ export async function credentials() {
   return auth;
 }
 
-// Trello's REST API. `params` go in the query string, as Trello takes them for writes too.
+// Trello's REST API. `params` go in the query string, as Trello takes them for writes too. The key and
+// token go in the OAuth header, not the URL: a failed fetch puts its whole URL in the error, and that
+// error is drawn in the panel.
 export async function trello(path, { method = "GET", params = {} } = {}) {
   const { key, token } = await credentials();
-  const query = Object.entries({ ...params, key, token }).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-  const r = await fetch(`https://api.trello.com/1/${path}${path.includes("?") ? "&" : "?"}${query}`, { method });
-  if (!r.ok) throw new Error(`Trello ${r.status} on ${path.split("?")[0]}${r.status === 401 ? ": check the key and token" : ""}`);
+  const query = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  const url = `https://api.trello.com/1/${path}${query ? (path.includes("?") ? "&" : "?") + query : ""}`;
+  const where = path.split("?")[0];
+  let r;
+  try {
+    r = await fetch(url, { method, headers: { Authorization: `OAuth oauth_consumer_key="${key}", oauth_token="${token}"` } });
+  } catch (e) {
+    // Offline, asleep, DNS: say so, without the URL and its query.
+    const why = String(e?.message ?? e).replace(/\s*\(?https?:\/\/\S+/g, "").replace(/\bfetching\b\s*failed:?\s*/i, "").trim();
+    throw new Error(`Trello unreachable on ${where}${why ? `: ${why}` : ""}`);
+  }
+  if (!r.ok) throw new Error(`Trello ${r.status} on ${where}${r.status === 401 ? ": check the key and token" : ""}`);
   return r.json();
 }
 
